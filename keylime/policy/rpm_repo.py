@@ -3,6 +3,7 @@
 """Analyze local and remote RPM repositories."""
 
 import gzip
+import logging
 import multiprocessing
 import os
 import pathlib
@@ -18,12 +19,11 @@ from typing import Dict, Generator, List, Optional, Tuple
 import rpm  # pylint: disable=import-error
 
 from keylime.common import algorithms
-from keylime.policy.logger import Logger
 from keylime.policy.utils import Compression, merge_maplists
 from keylime.signing import verify_signature_from_file
 from keylime.types import PathLike_str
 
-logger = Logger().logger()
+logger = logging.getLogger("policy.rpm_repo")
 
 
 def _parse_rpm_header(hdr: rpm.hdr) -> Tuple[Dict[str, List[str]], Dict[str, List[bytes]]]:

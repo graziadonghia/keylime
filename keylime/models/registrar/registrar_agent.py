@@ -1,12 +1,12 @@
 import base64
 import hmac
-
+from typing import Optional
 import cryptography.x509
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from keylime import cert_utils, config, crypto, keylime_logging
-from keylime.models.base import Boolean, Certificate, Dictionary, Integer, OneOf, PersistableModel, String, da_manager
+from keylime.models.base import Boolean, Certificate, Dictionary, Integer, OneOf, PersistableModel, String, LargeBinary, da_manager
 from keylime.tpm import tpm2_objects
 from keylime.tpm.tpm_main import Tpm
 
@@ -42,6 +42,9 @@ class RegistrarAgent(PersistableModel):
         cls._field("ip", String(15), nullable=True)
         cls._field("port", Integer, nullable=True)
         cls._field("mtls_cert", OneOf(Certificate, "disabled"), nullable=True)
+
+        #The pq_key used for the sphincs signature
+        cls._field("pq_key",String(500))
 
         # The number of times the agent has registered over its lifetime
         cls._field("regcount", Integer)
@@ -265,16 +268,27 @@ class RegistrarAgent(PersistableModel):
         if any(field in reg_fields for field in self.changes) and self.changes_valid:
             self.regcount += 1
 
-    def update(self, data):
+    # def _validate_pq_key(self, pq_key: str) -> None:
+    #     if not isinstance(pq_key, str):
+    #        raise ValueError("pq_key must be a string")
+    #     try:
+    #     # Prova a decodificare Base64 per verificare il formato
+    #       decoded_key = base64.b64decode(pq_key)
+    #     except Exception:
+    #       raise ValueError("Invalid pq_key: not a valid Base64 string")
+
+
+    def update(self, data):    
         # Bind key-value pairs ('data') to those fields which are meant to be externally changeable
         self.cast_changes(
             data,
-            ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "iak_tpm", "iak_cert", "idevid_tpm", "idevid_cert", "ip"]
+            ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "iak_tpm", "iak_cert", "idevid_tpm", "idevid_cert", "ip","pq_key"]
             + ["port", "mtls_cert"],
         )
 
         # Log info about received EK or IAK/IDevID
         self._log_root_identity()
+        #
         # Verify EK as valid
         self._check_ek()
         # Verify IAK/IDevID as valid and trusted
@@ -292,6 +306,16 @@ class RegistrarAgent(PersistableModel):
         self._prepare_status_flags()
         # Increment number of registrations if appropriate
         self._prepare_regcount()
+
+        # self._validate_pq_key(data.get("pq_key"))
+        # logger.info("Sphincs public key registered correctly")
+        # print("Begin PQ Public KEY (Base64 encoded)-----");
+        # print(data.get("pq_key"))
+        # print("-----End PQ Public KEY");
+       
+    
+        
+        
 
     def produce_ak_challenge(self):
         if not self.ek_tpm or not self.aik_tpm:
@@ -342,7 +366,7 @@ class RegistrarAgent(PersistableModel):
 
     def render(self, only=None):
         if not only:
-            only = ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "mtls_cert", "ip", "port", "regcount"]
+            only = ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "mtls_cert", "ip", "port", "regcount", "pq_key"]
 
             if self.virtual:
                 only.append("provider_keys")

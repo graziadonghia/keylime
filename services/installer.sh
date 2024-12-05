@@ -36,7 +36,7 @@ mkdir -p /var/lib/keylime
 mkdir -p /var/log/keylime
 mkdir -p /var/run/keylime
 
-chown keylime:keylime -R /etc/keylime
+#chown keylime:keylime -R /etc/keylime
 chown keylime:keylime -R /var/lib/keylime
 chown keylime:keylime -R /var/log/keylime
 chown keylime:keylime -R /var/run/keylime

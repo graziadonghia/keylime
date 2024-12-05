@@ -28,6 +28,7 @@ class RegistrarData(TypedDict):
     ek_tpm: str
     ekcert: Optional[str]
     provider_keys: NotRequired[Dict[str, str]]
+    pq_key: str
 
 
 logger = keylime_logging.init_logging("registrar_client")
@@ -53,6 +54,9 @@ def getData(
         client = RequestsClient(f"{bracketize_ipv6(registrar_ip)}:{registrar_port}", True, tls_context=tls_context)
         response = client.get(f"/v{api_version}/agents/{agent_id}")
         response_body = response.json()
+
+        # print("eccomi")
+        #print(response_body)
 
         if response.status_code == 404:
             logger.critical(
@@ -90,8 +94,14 @@ def getData(
         if "port" not in response_body["results"]:
             logger.critical("Error: did not receive port from Registrar Server.")
             return None
-
+        
+        if "pq_key" not in response_body["results"]:
+            logger.critical("Error: did not receive Post-Quantum key from Registrar Server.")
+            return None
+    
         r = response_body["results"]
+
+       
         res: RegistrarData = {
             "aik_tpm": r["aik_tpm"],
             "regcount": r["regcount"],
@@ -100,7 +110,9 @@ def getData(
             "port": r["port"],
             "mtls_cert": r.get("mtls_cert"),
             "ekcert": r.get("ekcert"),
+            "pq_key" : r["pq_key"],
         }
+        
         if "provider_keys" in r:
             res["provider_keys"] = r["provider_keys"]
 

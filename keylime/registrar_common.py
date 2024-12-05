@@ -1,4 +1,5 @@
 import base64
+from http.client import responses
 import http.server
 import ipaddress
 import os
@@ -137,7 +138,7 @@ class ProtectedHandler(BaseHandler):
                 web_util.echo_json_response(self, 404, f"agent {agent_id} not yet active")
                 logger.warning("GET returning 404 response. agent %s not yet active.", agent_id)
                 return
-
+            
             response = {
                 "aik_tpm": agent.aik_tpm,
                 "ek_tpm": agent.ek_tpm,
@@ -146,11 +147,13 @@ class ProtectedHandler(BaseHandler):
                 "ip": agent.ip,
                 "port": agent.port,
                 "regcount": agent.regcount,
+                "pq_key": agent.pq_key,
             }
 
             if agent.virtual:  # pyright: ignore
                 response["provider_keys"] = agent.provider_keys
 
+            logger.debug("Building response for agent %s: %s", agent_id, response)
             web_util.echo_json_response(self, 200, "Success", response)
             logger.info("GET returning 200 response for agent_id: %s", agent_id)
         else:
@@ -158,6 +161,7 @@ class ProtectedHandler(BaseHandler):
             json_response = session.query(RegistrarMain.agent_id).all()
             return_response = [item[0] for item in json_response]
             web_util.echo_json_response(self, 200, "Success", {"uuids": return_response})
+
             logger.info("GET returning 200 response for agent_id list")
 
         return
@@ -221,7 +225,6 @@ class UnprotectedHandler(BaseHandler):
         if rest_params is None:
             web_util.echo_json_response(self, 405, "Not Implemented: Use /version/ interface")
             return
-
         if "version" not in rest_params:
             web_util.echo_json_response(self, 400, "URI not supported")
             logger.warning("GET agent returning 400 response. URI not supported: %s", self.path)
@@ -278,7 +281,7 @@ class UnprotectedHandler(BaseHandler):
         _, agent_id = self._validate_input("POST", True)
         if not agent_id:
             return
-
+        
         try:
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length == 0:
@@ -300,6 +303,10 @@ class UnprotectedHandler(BaseHandler):
             tpm_identity = config.get("registrar", "tpm_identity", fallback="default")
             idevid_required = tpm_identity == "iak_idevid"
             ek_required = tpm_identity == "ek_cert"
+            pq_key = ""
+
+
+                  
 
             # Check cryptography version before iak and idevid checks
             # If idevid is required in config but version is <38.0.0 then stop
@@ -441,6 +448,9 @@ class UnprotectedHandler(BaseHandler):
             # Check for ip and port and mTLS cert
             contact_ip, contact_port, mtls_cert = UnprotectedHandler.get_network_params(json_body, agent_id)
 
+           
+            pq_key = json_body["pq_key"]
+
             # Add values to database
             d: Dict[str, Any] = {
                 "agent_id": agent_id,
@@ -459,7 +469,9 @@ class UnprotectedHandler(BaseHandler):
                 "key": key,
                 "provider_keys": {},
                 "regcount": regcount,
+                "pq_key":  pq_key,
             }
+
 
             try:
                 session.add(RegistrarMain(**d))

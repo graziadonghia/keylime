@@ -43,6 +43,7 @@ def upgrade_registrar():
         sa.Column("active", sa.Integer(), nullable=True),
         sa.Column("provider_keys", keylime.db.registrar_db.JSONPickleType(), nullable=True),
         sa.Column("regcount", sa.Integer(), nullable=True),
+        sa.Column("pq_key", sa.String(length=500), nullable=True),
         sa.PrimaryKeyConstraint("agent_id"),
     )
     # ### end Alembic commands ###

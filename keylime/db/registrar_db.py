@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, PickleType, String, Text
+from sqlalchemy import Column, Integer, PickleType, String, Text,LargeBinary
 from sqlalchemy.ext.declarative import declarative_base
 
 from keylime.json import JSONPickler
@@ -29,3 +29,4 @@ class RegistrarMain(Base):
     active = Column(Integer)
     provider_keys = Column(JSONPickleType(pickler=JSONPickler))
     regcount = Column(Integer)
+    pq_key = Column(String(500))

@@ -119,7 +119,7 @@ class Tenant:
         self.exponential_backoff = config.getboolean("tenant", "exponential_backoff")
         self.maxr = config.getint("tenant", "max_retries")
 
-        logger.info("Setting up client TLS...")
+        #logger.info("Setting up client TLS...")
         (cert, key, trusted_ca, key_password), verify_server_cert = web_util.get_tls_options(
             "tenant", is_client=True, logger=logger
         )
@@ -154,7 +154,7 @@ class Tenant:
                 cert, key, trusted_ca, key_password, verify_server_cert, is_client=True, logger=logger
             )
 
-            logger.info("TLS is enabled.")
+            #logger.info("TLS is enabled.")
         else:
             logger.warning("TLS is disabled.")
 
@@ -227,12 +227,12 @@ class Tenant:
             # Try to connect to the agent to get supported version
             if self.registrar_data["mtls_cert"] == "disabled":
                 self.enable_agent_mtls = False
-                logger.warning(
-                    "Warning: mTLS for %s is disabled: the identity of each node will be based on the properties of the TPM only. "
-                    "Unless you have strict control of your network, it is strongly advised that remote code execution should be disabled, "
-                    'by setting "payload_script=" and "extract_payload_zip=False" under "[agent]" in agent configuration file.',
-                    self.agent_fid_str,
-                )
+                # logger.warning(
+                # #     "Warning: mTLS for %s is disabled: the identity of each node will be based on the properties of the TPM only. "
+                #     "Unless you have strict control of your network, it is strongly advised that remote code execution should be disabled, "
+                #     'by setting "payload_script=" and "extract_payload_zip=False" under "[agent]" in agent configuration file.',
+                #     self.agent_fid_str,
+                # )
                 tls_context = None
             else:
                 # Store the agent self-signed certificate as a string
@@ -259,6 +259,7 @@ class Tenant:
                 try:
                     res = get_version.get("/version")
                 except requests.exceptions.SSLError as ssl_error:
+                    logger.error(ssl_error)
                     if "TLSV1_ALERT_UNKNOWN_CA" in str(ssl_error):
                         raise UserError(
                             "Keylime agent does not recognize mTLS certificate form tenant. "
@@ -602,6 +603,7 @@ class Tenant:
             "ak_tpm": self.registrar_data["aik_tpm"],
             "mtls_cert": self.registrar_data.get("mtls_cert", None),
             "supported_version": self.supported_version,
+            "pq_key": self.registrar_data["pq_key"],
         }
         json_message = json.dumps(data)
         do_cv = RequestsClient(self.verifier_base_url, True, tls_context=self.tls_context)
@@ -702,7 +704,7 @@ class Tenant:
             operational_state = states.state_to_str(response_json["results"][self.agent_uuid]["operational_state"])
             response_json["results"][self.agent_uuid]["operational_state"] = operational_state
 
-            logger.info("Agent Info from %s:\n%s", self.verifier_fid_str, json.dumps(response_json["results"]))
+            # logger.info("Agent Info from %s:\n%s", self.verifier_fid_str, json.dumps(response_json["results"]))
 
             return response_json
 
@@ -862,7 +864,7 @@ class Tenant:
                         #                            numtries,
                         #                        )
                         raise UserError(
-                            f"{self.agent_fid_str,} was not deleted from {self.verifier_fid_str} after {numtries} tries"
+                            f"{self.agent_fid_str,} was not deleted from {self.verifier_fid_str} after %d tries"
                         )
 
                     next_retry = retry.retry_time(self.exponential_backoff, self.retry_interval, numtries, logger)
@@ -932,8 +934,8 @@ class Tenant:
 
         logger.info("Status from %s: %s", self.registrar_fid_str, response["status"])
         # should be DEBUG
-        logger.info(json.dumps(response))
-        logger.info("Agent Info from %s:\n%s", self.registrar_fid_str, json.dumps(response["results"]))
+        #logger.info(json.dumps(response))
+        # logger.info("Agent Info from %s:\n%s", self.registrar_fid_str, json.dumps(response["results"]))
 
         return response
 
@@ -1084,11 +1086,11 @@ class Tenant:
                     ) as do_quote:
                         response = do_quote.get(params, timeout=self.request_timeout)
                 else:
-                    logger.warning("Connecting to %s without using mTLS!", self.agent_fid_str)
+                    # logger.warning("Connecting to %s without using mTLS!", self.agent_fid_str)
                     do_quote = RequestsClient(cloudagent_base_url, tls_enabled=False)
                     response = do_quote.get(params, timeout=self.request_timeout)
 
-                response_json = Tenant._jsonify_response(response, print_response=True, raise_except=True)
+                response_json = Tenant._jsonify_response(response, print_response=False, raise_except=True)
 
             except Exception as e:
                 if response is None or response.status_code in (503, 504):
@@ -1176,7 +1178,7 @@ class Tenant:
                 ) as post_ukey:
                     response = post_ukey.post(params, json=data, timeout=self.request_timeout)
             else:
-                logger.warning("Connecting to %s without using mTLS!", self.agent_fid_str)
+                # logger.warning("Connecting to %s without using mTLS!", self.agent_fid_str)
                 post_ukey = RequestsClient(cloudagent_base_url, tls_enabled=False)
                 response = post_ukey.post(params, json=data, timeout=self.request_timeout)
 
@@ -1213,7 +1215,7 @@ class Tenant:
                             timeout=self.request_timeout,
                         )
                 else:
-                    logger.warning("Connecting to %s without using mTLS!", self.agent_fid_str)
+                    # logger.warning("Connecting to %s without using mTLS!", self.agent_fid_str)
                     do_verify = RequestsClient(cloudagent_base_url, tls_enabled=False)
                     response = do_verify.get(
                         f"/v{self.supported_version}/keys/verify?challenge={challenge}", timeout=self.request_timeout
@@ -1444,7 +1446,7 @@ class Tenant:
 
     @staticmethod
     def _jsonify_response(
-        response: requests.Response, print_response: bool = True, raise_except: bool = False
+        response: requests.Response, print_response: bool = False, raise_except: bool = False
     ) -> Dict[str, Any]:
         json_response: Dict[str, Any]
         try:
@@ -1454,8 +1456,8 @@ class Tenant:
                 raise ValueError("Unable to convert response to JSON format") from e
             json_response = {}
 
-        if print_response:
-            print(json_response)
+        # if print_response:
+        #     print(json_response)
         return json_response
 
 

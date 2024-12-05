@@ -33,7 +33,8 @@ CREATE TABLE public.registrarmain (
     virtual integer,
     active integer,
     provider_keys text,
-    regcount integer
+    regcount integer,
+    pq_key character varying(500)
 );
 
 

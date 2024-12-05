@@ -40,7 +40,25 @@ from keylime.failure import MAX_SEVERITY_LABEL, Component, Event, Failure, set_s
 from keylime.ima import ima
 from keylime.mba import mba
 
+import ctypes
+from ctypes import c_char_p, c_ubyte, c_size_t, POINTER
+
+lib = ctypes.CDLL('/usr/local/lib/verifysign.so')
+
+counter = 0
+
+# Firma della funzione per `verify_signature`
+lib.verify_signature.argtypes = [
+    POINTER(c_ubyte),       # uint8_t* message
+    c_size_t,
+    POINTER(c_ubyte),       # uint8_t* signature
+    c_size_t,               # size_t signature_len
+    POINTER(c_ubyte)        # uint8_t* public_key
+]
+lib.verify_signature.restype = ctypes.c_int  # La funzione ritorna un int
+
 logger = keylime_logging.init_logging("verifier")
+
 
 GLOBAL_POLICY_CACHE: Dict[str, Dict[str, str]] = {}
 
@@ -85,6 +103,7 @@ exclude_db: Dict[str, Any] = {
     "next_ima_ml_entry": 0,
     "learned_ima_keyrings": {},
     "ssl_context": None,
+    "pq_key" : "",
 }
 
 
@@ -550,6 +569,8 @@ class AgentsHandler(BaseHandler):
                         "last_successful_attestation": 0,
                     }
 
+                    exclude_db["pq_key"] = json_body["pq_key"]
+
                     if "verifier_ip" in json_body:
                         agent_data["verifier_ip"] = json_body["verifier_ip"]
                     else:
@@ -774,8 +795,8 @@ class AgentsHandler(BaseHandler):
                             "verifier", agent_data["mtls_cert"], logger=logger
                         )
 
-                    if agent_data["ssl_context"] is None:
-                        logger.warning("Connecting to agent without mTLS: %s", agent_id)
+                    # if agent_data["ssl_context"] is None:
+                    #     logger.warning("Connecting to agent without mTLS: %s", agent_id)
 
                     asyncio.ensure_future(process_agent(agent_data, states.GET_QUOTE))
                     web_util.echo_json_response(self, 200, "Success")
@@ -819,8 +840,8 @@ class AgentsHandler(BaseHandler):
                     agent["ssl_context"] = web_util.generate_agent_tls_context(
                         "verifier", agent["mtls_cert"], logger=logger
                     )
-                if agent["ssl_context"] is None:
-                    logger.warning("Connecting to agent without mTLS: %s", agent_id)
+                # if agent["ssl_context"] is None:
+                #     logger.warning("Connecting to agent without mTLS: %s", agent_id)
 
                 agent["operational_state"] = states.START
                 asyncio.ensure_future(process_agent(agent, states.GET_QUOTE))
@@ -1133,6 +1154,7 @@ class VerifyIdentityHandler(BaseHandler):
             logger.warning("GET returning 400 response. uri not supported: %s", self.request.path)
             return
 
+
         # make sure we have all of the necessary parameters: agent_uuid, quote and nonce
         agent_id = rest_params.get("agent_uuid")
         if agent_id is None or agent_id == "":
@@ -1158,6 +1180,7 @@ class VerifyIdentityHandler(BaseHandler):
             logger.warning("GET returning 400 response. missing query parameter 'hash_alg'")
             return
 
+      
         # get the agent information from the DB
         agent = None
         try:
@@ -1493,6 +1516,7 @@ async def invoke_get_quote(
 
     params = cloud_verifier_common.prepare_get_quote(agent)
 
+
     partial_req = "1"
     if need_pubkey:
         partial_req = "0"
@@ -1510,7 +1534,10 @@ async def invoke_get_quote(
         **kwargs,
         timeout=timeout,
     )
+
+    logger.info("Request of Integrity Quote, nonce = %s", params['nonce'])
     response = await res
+    logger.info("Integrity Quote received")
 
     if response.status_code != 200:
         # this is a connection error, retry get quote
@@ -1555,7 +1582,64 @@ async def invoke_get_quote(
         asyncio.ensure_future(process_agent(agent, states.FAILED, failure))
     else:
         try:
+
+            #prendo la chiave del registrar e la decodifico
+
+            pq_key_registrar = bytearray(base64.b64decode(exclude_db["pq_key"]))
+            #print("chiave del registrar: ", pq_key_registrar)
+
             json_response = json.loads(response.body)
+            #print(json_response)
+
+
+            # Estrazione dei campi desiderati
+            quote = json_response.get("results", {}).get("quote").encode('utf-8')
+            quote_len= json_response.get("results", {}).get("quote_len")
+            sign_sphincs = bytearray(json_response.get("results", {}).get("sign_sphincs"))
+            sign_sphincs_len = json_response.get("results", {}).get("sign_sphincs_len")
+            pq_key = bytearray(json_response.get("results", {}).get("pq_key"))
+            pq_key_len= json_response.get("results", {}).get("pq_key_len")
+
+            # Crea i puntatori ctypes per signature e public_key
+            signature_ptr = (c_ubyte * sign_sphincs_len)(*sign_sphincs)  # Crea un array di uint8_t per la firma
+            public_key_ptr = (c_ubyte * pq_key_len)(*pq_key) 
+            quote_ptr = (c_ubyte * quote_len)(*quote)
+
+           
+            #print("chiave dall'agent:", pq_key)
+
+            if sign_sphincs is None or sign_sphincs_len is None or pq_key is None:
+                logger.warning("missing_fields", "One or more required fields not found in Agent's response.")
+                # Gestisci l'errore come preferisci
+                failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
+                asyncio.ensure_future(process_agent(agent, states.FAILED, failure))
+                return
+
+            if pq_key == pq_key_registrar:
+                logger.info("PQ key received correctly \n")
+                result = lib.verify_signature(quote_ptr,
+                c_size_t(quote_len), signature_ptr, c_size_t(sign_sphincs_len), public_key_ptr)
+
+
+                if result == 0: 
+                    logger.info("Verification of Sphincs signature: Valid")
+                    # print("Verification of Sphincs signature: Valid")
+                    global counter
+                    counter = 0
+                else:
+                    logger.error("Verification of Sphincs signature: Not valid")
+                    # print("Verification of Sphincs signature: Valid")
+                    counter +=1 
+                    if counter == 8:
+                        failure = Failure(Component.QUOTE_VALIDATION)
+                        failure.add_event("invalid Sphincs signature",{"message": "Sphincs Public Key is not corresponding to the correct one"},False)
+                        asyncio.ensure_future(process_agent(agent, states.INVALID_QUOTE, failure))
+            else:
+                failure = Failure(Component.QUOTE_VALIDATION)
+                failure.add_event("invalid Sphincs signature",{"message": "Sphincs Public Key is not corresponding to the correct one"},False)
+                asyncio.ensure_future(process_agent(agent, states.INVALID_QUOTE, failure))
+                logger.error("Sphincs Public Key is not corresponding to the correct one")
+
 
             # validate the cloud agent response
             if "provide_V" not in agent:
