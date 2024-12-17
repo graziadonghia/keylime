@@ -33,6 +33,7 @@ OID_HWTYPE_TPM = "2.23.133.1.2"
 
 logger = keylime_logging.init_logging("cert_utils")
 
+# file with algorithms
 
 def is_x509_cert(cert_data: bytes) -> bool:
     """

@@ -16,6 +16,7 @@ from keylime.fs_util import ch_dir
 
 logger = keylime_logging.init_logging("durable_attestation")
 
+# file with algorithms
 
 class BaseRecordManagement(metaclass=abc.ABCMeta):
     def __init__(self, service: str, key_tls_pub: Optional[str] = "") -> None:

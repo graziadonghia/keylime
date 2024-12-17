@@ -2,7 +2,7 @@ r"""DSSE signing implementation.
 
 Based on the reference implementation at: https://github.com/secure-systems-lab/dsse/tree/master/implementation.
 """
-
+# algorithm implementation 
 import base64
 import binascii
 import json

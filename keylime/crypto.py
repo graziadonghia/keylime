@@ -2,7 +2,9 @@ import base64
 import hashlib
 import hmac
 import os
+import oqs
 import secrets
+from pprint import pprint
 from typing import Optional, Union
 
 # Crypto implementation using python cryptography package
@@ -15,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPubl
 from cryptography.hazmat.primitives.ciphers import AEADEncryptionContext, Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+# algorithms
 aes_block_size = 16
 
 
@@ -201,3 +204,36 @@ def decrypt(ciphertext: bytes, key: bytes) -> bytes:
 
     decryptor = Cipher(algorithms.AES(key), modes.GCM(iv, tag), backend=default_backend()).decryptor()
     return decryptor.update(ciphertext) + decryptor.finalize()
+
+def liboqs_python_sig():
+    print("liboqs version:", oqs.oqs_version())
+    print("liboqs-python version:", oqs.oqs_python_version())
+    print("Enabled signature mechanisms:")
+    sigs = oqs.get_enabled_sig_mechanisms()
+    pprint(sigs, compact=True)
+
+    message = "This is the message to sign".encode()
+
+    # Create signer and verifier with sample signature mechanisms
+    sigalg = "Dilithium2"
+    with oqs.Signature(sigalg) as signer:
+        with oqs.Signature(sigalg) as verifier:
+            print("\nSignature details:")
+            pprint(signer.details)
+
+            # Signer generates its keypair
+            signer_public_key = signer.generate_keypair()
+            # Optionally, the secret key can be obtained by calling export_secret_key()
+            # and the signer can later be re-instantiated with the key pair:
+            # secret_key = signer.export_secret_key()
+
+            # Store key pair, wait... (session resumption):
+            # signer = oqs.Signature(sigalg, secret_key)
+
+            # Signer signs the message
+            signature = signer.sign(message)
+
+            # Verifier verifies the signature
+            is_valid = verifier.verify(message, signature, signer_public_key)
+
+            print("\nValid signature?", is_valid)

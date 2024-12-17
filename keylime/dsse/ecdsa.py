@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from . import dsse
 
+# algorithm implementation 
 
 class Signer(dsse.Signer):
     def __init__(self, secret_key: ec.EllipticCurvePrivateKey):

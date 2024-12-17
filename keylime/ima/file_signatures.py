@@ -4,6 +4,7 @@ import json
 import struct
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+# file with algorithms 
 import jsonschema
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm

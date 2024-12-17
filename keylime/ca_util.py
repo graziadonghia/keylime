@@ -14,7 +14,7 @@ Protips:
   # openssl x509 -in cacert.crt -noout -text
 
 """
-
+# file with openssl algorithms 
 import argparse
 import base64
 import getpass

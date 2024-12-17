@@ -13,6 +13,7 @@ from cryptography.x509.oid import NameOID
 
 from . import dsse
 
+# algorithm implementation 
 
 class Signer(dsse.Signer):
     def __init__(self, secret_key: ec.EllipticCurvePrivateKey, certificate_path: str):
