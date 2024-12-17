@@ -8,6 +8,8 @@
 KEYLIME_GIT=https://github.com/keylime/keylime.git
 TPM2TSS_GIT=https://github.com/tpm2-software/tpm2-tss.git
 TPM2TOOLS_GIT=https://github.com/tpm2-software/tpm2-tools.git
+LIBOQS_GIT=https://github.com/open-quantum-safe/liboqs.git
+LIBOQSPYTHON_GIT=https://github.com/open-quantum-safe/liboqs-python.git
 KEYLIME_VER="master"
 TPM2TSS_VER="3.2.x"
 TPM2TOOLS_VER="5.5"
@@ -481,4 +483,35 @@ if [ ! -d "/var/lib/keylime/tpm_cert_store" ]; then
 else
   echo "Updating existing cert store"
   cp -n $KEYLIME_DIR/tpm_cert_store/* /var/lib/keylime/tpm_cert_store/
+fi
+
+# Installing liboqs
+echo
+echo "=================================================================================="
+echo $'\t\t\t\tInstall liboqs'
+echo "=================================================================================="
+if [ ! -d "liboqs" ]; then
+    git clone $LIBOQS_GIT
+    #cd liboqs
+    cmake -S liboqs -B liboqs/build -DBUILD_SHARED_LIBS=ON
+    cmake --build liboqs/build --parallel 8
+    cmake --build liboqs/build --target install
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/libcleark
+else
+  echo "liboqs is already installed"
+fi
+# Installing liboqs-python
+echo
+echo "=================================================================================="
+echo $'\t\t\t\tInstall liboqs-python'
+echo "=================================================================================="
+if [ ! -d "liboqs'python" ]; then
+    git clone --depth=1 $LIBOQSPYTHON_GIT
+    cd liboqs-python
+    pip3 install .
+    export PYTHONPATH=$PYTHONPATH:$(pwd)
+    # echo "Running unit test"
+    # nose2 --verbose liboqs-python
+else
+  echo "liboqs'python is already installed"
 fi
