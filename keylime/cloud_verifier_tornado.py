@@ -2,6 +2,8 @@ import asyncio
 import base64
 import functools
 import os
+import oqs
+from pprint import pprint
 import signal
 import sys
 import traceback
@@ -45,6 +47,7 @@ from ctypes import c_char_p, c_ubyte, c_size_t, POINTER
 
 lib = ctypes.CDLL('/usr/local/lib/verifysign.so')
 
+# file with algorithms 
 counter = 0
 
 # Firma della funzione per `verify_signature`
@@ -2071,6 +2074,38 @@ def get_agents_by_verifier_id(verifier_id: str) -> List[VerfierMain]:
         logger.error("SQLAlchemy Error: %s", e)
     return []
 
+def test_liboqs_python():
+    logger.info("liboqs version:", oqs.oqs_version())
+    logger.info("liboqs-python version:", oqs.oqs_python_version())
+    logger.info("Enabled signature mechanisms:")
+    sigs = oqs.get_enabled_sig_mechanisms()
+    pprint(sigs, compact=True)
+
+    message = "This is the message to sign".encode()
+
+    # Create signer and verifier with sample signature mechanisms
+    sigalg = "SPHINCS+-SHAKE-256f-simple"
+    with oqs.Signature(sigalg) as signer:
+        with oqs.Signature(sigalg) as verifier:
+            print("\nSignature details:")
+            pprint(signer.details)
+
+            # Signer generates its keypair
+            signer_public_key = signer.generate_keypair()
+            # Optionally, the secret key can be obtained by calling export_secret_key()
+            # and the signer can later be re-instantiated with the key pair:
+            # secret_key = signer.export_secret_key()
+
+            # Store key pair, wait... (session resumption):
+            # signer = oqs.Signature(sigalg, secret_key)
+
+            # Signer signs the message
+            signature = signer.sign(message)
+
+            # Verifier verifies the signature
+            is_valid = verifier.verify(message, signature, signer_public_key)
+
+            print("\nValid signature?", is_valid)
 
 def main() -> None:
     """Main method of the Cloud Verifier Server.  This method is encapsulated in a function for packaging to allow it to be
@@ -2082,6 +2117,8 @@ def main() -> None:
     verifier_host = config.get("verifier", "ip")
     verifier_id = config.get("verifier", "uuid", fallback=cloud_verifier_common.DEFAULT_VERIFIER_ID)
 
+    logger.info("Main of cloud_verifier_tornado.py")
+    test_liboqs_python()
     # allow tornado's max upload size to be configurable
     max_upload_size = None
     if config.has_option("verifier", "max_upload_size"):
