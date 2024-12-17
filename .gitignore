@@ -38,6 +38,8 @@ MANIFEST
 AUTHORS
 ChangeLog
 /config/
+liboqs/
+liboqs-python/
 
 # Installer logs
 pip-log.txt
