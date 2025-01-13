@@ -42,23 +42,8 @@ from keylime.failure import MAX_SEVERITY_LABEL, Component, Event, Failure, set_s
 from keylime.ima import ima
 from keylime.mba import mba
 
-import ctypes
-from ctypes import c_char_p, c_ubyte, c_size_t, POINTER
-
-lib = ctypes.CDLL('/usr/local/lib/verifysign.so')
-
 # file with algorithms 
 counter = 0
-
-# Firma della funzione per `verify_signature`
-lib.verify_signature.argtypes = [
-    POINTER(c_ubyte),       # uint8_t* message
-    c_size_t,
-    POINTER(c_ubyte),       # uint8_t* signature
-    c_size_t,               # size_t signature_len
-    POINTER(c_ubyte)        # uint8_t* public_key
-]
-lib.verify_signature.restype = ctypes.c_int  # La funzione ritorna un int
 
 logger = keylime_logging.init_logging("verifier")
 
@@ -1586,64 +1571,38 @@ async def invoke_get_quote(
     else:
         try:
 
-            #prendo la chiave del registrar e la decodifico
+            # retrieve pq_key from registrar db
 
             pq_key_registrar = bytearray(base64.b64decode(exclude_db["pq_key"]))
-            #print("chiave del registrar: ", pq_key_registrar)
+            logger.info("PQ key retrieved correctly \n")
 
             json_response = json.loads(response.body)
             #print(json_response)
 
-
-            # Estrazione dei campi desiderati
             quote = json_response.get("results", {}).get("quote").encode('utf-8')
             quote_len= json_response.get("results", {}).get("quote_len")
-            sign_sphincs = bytearray(json_response.get("results", {}).get("sign_sphincs"))
-            sign_sphincs_len = json_response.get("results", {}).get("sign_sphincs_len")
-            pq_key = bytearray(json_response.get("results", {}).get("pq_key"))
-            pq_key_len= json_response.get("results", {}).get("pq_key_len")
+            sign_sphincs = json_response.get("results", {}).get("sign_sphincs")
 
-            # Crea i puntatori ctypes per signature e public_key
-            signature_ptr = (c_ubyte * sign_sphincs_len)(*sign_sphincs)  # Crea un array di uint8_t per la firma
-            public_key_ptr = (c_ubyte * pq_key_len)(*pq_key) 
-            quote_ptr = (c_ubyte * quote_len)(*quote)
-
-           
-            #print("chiave dall'agent:", pq_key)
-
-            if sign_sphincs is None or sign_sphincs_len is None or pq_key is None:
+            if sign_sphincs is None:
                 logger.warning("missing_fields", "One or more required fields not found in Agent's response.")
-                # Gestisci l'errore come preferisci
                 failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
                 asyncio.ensure_future(process_agent(agent, states.FAILED, failure))
                 return
 
-            if pq_key == pq_key_registrar:
-                logger.info("PQ key received correctly \n")
-                result = lib.verify_signature(quote_ptr,
-                c_size_t(quote_len), signature_ptr, c_size_t(sign_sphincs_len), public_key_ptr)
+            result = verify_pq_signature(quote, sign_sphincs, pq_key_registrar) 
 
+            if result == True: 
+                logger.info("Verification of PQ signature: Valid")
+                global counter
+                counter = 0
 
-                if result == 0: 
-                    logger.info("Verification of Sphincs signature: Valid")
-                    # print("Verification of Sphincs signature: Valid")
-                    global counter
-                    counter = 0
-                else:
-                    logger.error("Verification of Sphincs signature: Not valid")
-                    # print("Verification of Sphincs signature: Valid")
-                    counter +=1 
-                    if counter == 8:
-                        failure = Failure(Component.QUOTE_VALIDATION)
-                        failure.add_event("invalid Sphincs signature",{"message": "Sphincs Public Key is not corresponding to the correct one"},False)
-                        asyncio.ensure_future(process_agent(agent, states.INVALID_QUOTE, failure))
             else:
-                failure = Failure(Component.QUOTE_VALIDATION)
-                failure.add_event("invalid Sphincs signature",{"message": "Sphincs Public Key is not corresponding to the correct one"},False)
-                asyncio.ensure_future(process_agent(agent, states.INVALID_QUOTE, failure))
-                logger.error("Sphincs Public Key is not corresponding to the correct one")
-
-
+                logger.error("Verification of PQ signature: Not valid")
+                counter +=1 
+                if counter == 8:
+                    failure = Failure(Component.QUOTE_VALIDATION)
+                    failure.add_event("invalid PQ signature",{"message": "PQ Public Key is not corresponding to the correct one"},False)
+                    asyncio.ensure_future(process_agent(agent, states.INVALID_QUOTE, failure))
             # validate the cloud agent response
             if "provide_V" not in agent:
                 agent["provide_V"] = True
@@ -2073,39 +2032,16 @@ def get_agents_by_verifier_id(verifier_id: str) -> List[VerfierMain]:
     except SQLAlchemyError as e:
         logger.error("SQLAlchemy Error: %s", e)
     return []
-
-def test_liboqs_python():
-    logger.info("liboqs version:", oqs.oqs_version())
-    logger.info("liboqs-python version:", oqs.oqs_python_version())
-    logger.info("Enabled signature mechanisms:")
-    sigs = oqs.get_enabled_sig_mechanisms()
-    pprint(sigs, compact=True)
-
-    message = "This is the message to sign".encode()
-
-    # Create signer and verifier with sample signature mechanisms
-    sigalg = "SPHINCS+-SHAKE-256f-simple"
+def verify_pq_signature(message, signature, signer_public_key):
+    print(type(message), type(signature), type(signer_public_key))
+    encoded_message = bytes(message)
+    encoded_signature = bytes(signature)
+    encoded_key = bytes(signer_public_key)
+    sigalg = "SPHINCS+-SHAKE-256s-simple"
     with oqs.Signature(sigalg) as signer:
         with oqs.Signature(sigalg) as verifier:
-            print("\nSignature details:")
-            pprint(signer.details)
-
-            # Signer generates its keypair
-            signer_public_key = signer.generate_keypair()
-            # Optionally, the secret key can be obtained by calling export_secret_key()
-            # and the signer can later be re-instantiated with the key pair:
-            # secret_key = signer.export_secret_key()
-
-            # Store key pair, wait... (session resumption):
-            # signer = oqs.Signature(sigalg, secret_key)
-
-            # Signer signs the message
-            signature = signer.sign(message)
-
-            # Verifier verifies the signature
-            is_valid = verifier.verify(message, signature, signer_public_key)
-
-            print("\nValid signature?", is_valid)
+            is_valid = verifier.verify(encoded_message, encoded_signature, encoded_key)
+            return is_valid
 
 def main() -> None:
     """Main method of the Cloud Verifier Server.  This method is encapsulated in a function for packaging to allow it to be
@@ -2118,7 +2054,6 @@ def main() -> None:
     verifier_id = config.get("verifier", "uuid", fallback=cloud_verifier_common.DEFAULT_VERIFIER_ID)
 
     logger.info("Main of cloud_verifier_tornado.py")
-    test_liboqs_python()
     # allow tornado's max upload size to be configurable
     max_upload_size = None
     if config.has_option("verifier", "max_upload_size"):

@@ -505,7 +505,7 @@ echo
 echo "=================================================================================="
 echo $'\t\t\t\tInstall liboqs-python'
 echo "=================================================================================="
-if [ ! -d "liboqs'python" ]; then
+if [ ! -d "liboqs-python" ]; then
     git clone --depth=1 $LIBOQSPYTHON_GIT
     cd liboqs-python
     pip3 install .
@@ -513,5 +513,5 @@ if [ ! -d "liboqs'python" ]; then
     # echo "Running unit test"
     # nose2 --verbose liboqs-python
 else
-  echo "liboqs'python is already installed"
+  echo "liboqs-python is already installed"
 fi
