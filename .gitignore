@@ -68,4 +68,4 @@ cv_data.sqlite
 reg_data.sqlite
 tpmdata.yml
 encrypted_payload
-runtime_policy.json
+./runtime_policy.json
