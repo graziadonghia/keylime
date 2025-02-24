@@ -56,11 +56,10 @@ INITRAMFS_LOC="/boot/"
 INITRAMFS_STAGING_DIR=${WORK_DIR}/ima_ramfs/
 INITRAMFS_TOOLS_DIR=${WORK_DIR}/initramfs-tools
 BOOT_AGGREGATE_LOC="/sys/kernel/security/ima/ascii_runtime_measurements"
-ROOTFS_LOC="/"
+ROOTFS_LOC="/usr/bin"
 EXCLUDE_LIST="none"
 SKIP_PATH="none"
 ALGO_LIST=("sha1sum" "sha256sum" "sha512sum")
-
 # Grabs Debian's initramfs_tools from Git repo if no other options exist
 if [[ ! `command -v unmkinitramfs` && ! -x "/usr/lib/dracut/skipcpio" ]] ; then
     # Create temp dir for pulling in initramfs-tools
@@ -205,6 +204,9 @@ else
     announce "--- Skipping boot aggregate..."
 fi
 
+# announce "--- Adding all appropriate files from $ROOTFS_LOC on allowlist $ALLOWLIST_DIR/${OUTPUT} ..."
+
+# shorter 
 announce "--- Adding all appropriate files from $ROOTFS_LOC on allowlist $ALLOWLIST_DIR/${OUTPUT} ..."
 # Add all appropriate files under root FS to allowlist
 pushd $ROOTFS_LOC > /dev/null 2>&1
