@@ -111,6 +111,7 @@ def _validate_ima_ng(
     path: ast.Name,
     hash_types: str = "digests",
 ) -> Failure:
+    logger.debug("Validating IMA entry %s", path.name)
     failure = Failure(Component.IMA, ["validation", "ima-ng"])
     if runtime_policy is not None:
         if exclude_regex is not None and exclude_regex.match(path.name):

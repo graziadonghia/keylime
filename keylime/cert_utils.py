@@ -101,6 +101,8 @@ def verify_cert(cert: Certificate, tpm_cert_store: str, cert_type: str = "") -> 
         logger.warning("Error loading trusted certificates from the TPM cert store: %s", err)
         return False
 
+    logger.debug("Loaded %d trusted certificates from the TPM cert store", len(trusted_certs))
+
     try:
         for cert_file, pem_cert in trusted_certs.items():
             try:
@@ -108,7 +110,10 @@ def verify_cert(cert: Certificate, tpm_cert_store: str, cert_type: str = "") -> 
             except Exception as err:
                 logger.warning("Ignoring certificate file %s due to error: %s", cert_file, str(err))
                 continue
+            logger.debug("Checking certificate file %s with subject %s", cert_file, signcert.subject)
+
             if cert.issuer != signcert.subject:
+                logger.debug("Issuer %s does not match subject %s", cert.issuer, signcert.subject)
                 continue
 
             signcert_pubkey = signcert.public_key()
@@ -132,6 +137,7 @@ def verify_cert(cert: Certificate, tpm_cert_store: str, cert_type: str = "") -> 
                     logger.warning("Unsupported public key type: %s", type(signcert_pubkey))
                     continue
             except crypto_exceptions.InvalidSignature:
+                logger.debug("Invalid signature for certificate file %s", cert_file)
                 continue
 
             logger.debug("Cert to verify matched cert: %s", cert_file)
@@ -142,6 +148,7 @@ def verify_cert(cert: Certificate, tpm_cert_store: str, cert_type: str = "") -> 
         raise Exception(f"Error processing {cert_type} certificate.").with_traceback(sys.exc_info()[2])
 
     logger.error("No Root CA matched %s Certificate", cert_type)
+
     return False
 
 
