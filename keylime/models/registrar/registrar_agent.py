@@ -308,10 +308,10 @@ class RegistrarAgent(PersistableModel):
         self._prepare_regcount()
 
         # self._validate_pq_key(data.get("pq_key"))
-        # logger.info("Sphincs public key registered correctly")
-        # print("Begin PQ Public KEY (Base64 encoded)-----");
-        # print(data.get("pq_key"))
-        # print("-----End PQ Public KEY");
+        logger.info("PQ public key registered correctly")
+        logger.info("Begin PQ Public KEY (Base64 encoded)-----")
+        logger.info(data.get("pq_key"))
+        logger.info("-----End PQ Public KEY-----")
        
     
         

@@ -3,6 +3,7 @@ from http.client import responses
 import http.server
 import ipaddress
 import os
+import oqs
 import select
 import signal
 import socket
@@ -28,6 +29,17 @@ from keylime.db.keylime_db import DBEngineManager, SessionManager
 from keylime.db.registrar_db import RegistrarMain
 from keylime.tpm import tpm2_objects
 from keylime.tpm.tpm_main import Tpm
+
+def verify_pq_signature(message, signature, signer_public_key):
+    print(type(message), type(signature), type(signer_public_key))
+    encoded_message = bytes(message)
+    encoded_signature = bytes(signature)
+    encoded_key = bytes(signer_public_key)
+    sigalg = "ML-DSA-65"
+    with oqs.Signature(sigalg) as signer:
+        with oqs.Signature(sigalg) as verifier:
+            is_valid = verifier.verify(encoded_message, encoded_signature, encoded_key)
+            return is_valid
 
 logger = keylime_logging.init_logging("registrar")
 
@@ -522,6 +534,11 @@ class UnprotectedHandler(BaseHandler):
             json_body = json.loads(post_body)
 
             auth_tag = json_body["auth_tag"]
+            challenge_sig = json_body["challenge_sig"]
+            result = verify_pq_signature(auth_tag, challenge_sig, pq_key) 
+            logger.info("Result of PQ signature verification")
+            logger.info(result)
+            logger.info(challenge_sig)
             try:
                 agent = session.query(RegistrarMain).filter_by(agent_id=agent_id).first()
             except NoResultFound as e:

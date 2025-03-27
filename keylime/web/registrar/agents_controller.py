@@ -62,6 +62,9 @@ class AgentsController(Controller):
         accepted = agent.verify_ak_response(auth_tag)
 
         if accepted:
+            logger.info("Authentication tag signature verified")
+            logger.info("Authentication tag verified")
+            logger.info("Agent activated")
             agent.commit_changes()
             self.respond(200, "Success")
         else:
