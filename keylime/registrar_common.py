@@ -31,12 +31,21 @@ from keylime.tpm import tpm2_objects
 from keylime.tpm.tpm_main import Tpm
 
 def verify_pq_signature(message, signature, signer_public_key):
-    print(type(message), type(signature), type(signer_public_key))
-    encoded_message = bytes(message)
-    encoded_signature = bytes(signature)
-    encoded_key = bytes(signer_public_key)
-    sigalg = "ML-DSA-65"
+   print(type(message), type(signature), type(signer_public_key))
+
+    # Only encode if not already bytes
+    encoded_message = message if isinstance(message, bytes) else bytes(message, encoding="utf-8")
+    encoded_signature = signature if isinstance(signature, bytes) else bytes(signature, encoding="utf-8")
+    encoded_key = signer_public_key if isinstance(signer_public_key, bytes) else bytes(signer_public_key, encoding="utf-8")
+    sigalg = "ML-DSA-87"
     with oqs.Signature(sigalg) as signer:
+        # print public key expected length
+        logger.debug("Public key expected length: %s", len(signer.length_public_key))
+        logger.debug("Public key length: %s", len(encoded_key))
+        
+        # print signature expected length
+        logger.debug("Signature expected length: %s", len(signer.length_signature))
+        logger.debug("Signature length: %s", len(encoded_signature))
         with oqs.Signature(sigalg) as verifier:
             is_valid = verifier.verify(encoded_message, encoded_signature, encoded_key)
             return is_valid
@@ -161,7 +170,8 @@ class ProtectedHandler(BaseHandler):
                 "regcount": agent.regcount,
                 "pq_key": agent.pq_key,
             }
-
+            logger.debug("PQ KEY")
+            logger.debug(agent.pq_key)
             if agent.virtual:  # pyright: ignore
                 response["provider_keys"] = agent.provider_keys
 
@@ -462,7 +472,8 @@ class UnprotectedHandler(BaseHandler):
 
            
             pq_key = json_body["pq_key"]
-
+            logger.debug("PQ KEY")
+            logger.debug(pq_key)
             # Add values to database
             d: Dict[str, Any] = {
                 "agent_id": agent_id,
@@ -534,11 +545,7 @@ class UnprotectedHandler(BaseHandler):
             json_body = json.loads(post_body)
 
             auth_tag = json_body["auth_tag"]
-            challenge_sig = json_body["challenge_sig"]
-            result = verify_pq_signature(auth_tag, challenge_sig, pq_key) 
-            logger.info("Result of PQ signature verification")
-            logger.info(result)
-            logger.info(challenge_sig)
+            logger.info("Auth tag REGISTRAR COMMON: %s", auth_tag)
             try:
                 agent = session.query(RegistrarMain).filter_by(agent_id=agent_id).first()
             except NoResultFound as e:

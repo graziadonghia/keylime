@@ -1,10 +1,11 @@
 import base64
 import hmac
-from typing import Optional
+from typing import Optional, List
+from sqlalchemy import LargeBinary
 import cryptography.x509
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
+import base64
 from keylime import cert_utils, config, crypto, keylime_logging
 from keylime.models.base import Boolean, Certificate, Dictionary, Integer, OneOf, PersistableModel, String, LargeBinary, da_manager
 from keylime.tpm import tpm2_objects
@@ -44,7 +45,7 @@ class RegistrarAgent(PersistableModel):
         cls._field("mtls_cert", OneOf(Certificate, "disabled"), nullable=True)
 
         #The pq_key used for the sphincs signature
-        cls._field("pq_key",String(500))
+        cls._field("pq_key", String(5000), nullable=True)
 
         # The number of times the agent has registered over its lifetime
         cls._field("regcount", Integer)
@@ -268,14 +269,22 @@ class RegistrarAgent(PersistableModel):
         if any(field in reg_fields for field in self.changes) and self.changes_valid:
             self.regcount += 1
 
-    # def _validate_pq_key(self, pq_key: str) -> None:
-    #     if not isinstance(pq_key, str):
-    #        raise ValueError("pq_key must be a string")
+    # def _validate_pq_key(self, pq_key: bytes) -> None:
+    #     if not isinstance(pq_key, bytes):
+    #        raise ValueError("pq_key must be a bytes")
     #     try:
     #     # Prova a decodificare Base64 per verificare il formato
     #       decoded_key = base64.b64decode(pq_key)
     #     except Exception:
     #       raise ValueError("Invalid pq_key: not a valid Base64 string")
+    def _validate_pq_key(self, pq_key: str) -> None:
+        if not isinstance(pq_key, str):
+            raise ValueError("pq_key must be a str")
+        try:
+        # Prova a decodificare Base64 per verificare il formato
+            decoded_key = base64.b64decode(pq_key)
+        except Exception:
+            raise ValueError("Invalid pq_key: not a valid Base64 string")
 
 
     def update(self, data):    
@@ -307,11 +316,30 @@ class RegistrarAgent(PersistableModel):
         # Increment number of registrations if appropriate
         self._prepare_regcount()
 
-        # self._validate_pq_key(data.get("pq_key"))
+        pq_key_list = data.get("pq_key") # list of 2592 integers, same as Rust
+        logger.info("pq_key_list = %s", pq_key_list)
+        pq_key = bytes(pq_key_list)
+        logger.info("pq_key_list type = %s", type(pq_key_list))
+        logger.info("Type of pq_key = %s", type(pq_key))
+        
+        # Use Base64 to encode the bytes to an ASCII string.
+        pq_key_b64 = base64.b64encode(pq_key).decode("ascii")
+        logger.info("PQ key (Base64) = %s", pq_key_b64)
+        logger.info("PQ key length (Base64) = %s", len(pq_key_b64))
+
+        # Store the Base64 encoded string in your model.
+        self.pq_key = pq_key_b64
+
+        #self._validate_pq_key(pq_key)
         logger.info("PQ public key registered correctly")
         logger.info("Begin PQ Public KEY (Base64 encoded)-----")
-        logger.info(data.get("pq_key"))
+        logger.info(self.pq_key)
         logger.info("-----End PQ Public KEY-----")
+        logger.info("PQ public key list length = %s", len(pq_key_list))
+        logger.info("PQ public key length = %s", len(pq_key))
+        # logger.info("Begin PQ Public KEY (Base64 decoded)-----")
+        # logger.info(pq_key)
+        # logger.info("-----End PQ Public KEY-----")
        
     
         
@@ -338,6 +366,7 @@ class RegistrarAgent(PersistableModel):
         return challenge.decode("utf-8")
 
     def verify_ak_response(self, response):
+        logger.debug("Verifying AK response")
         expected_response = crypto.do_hmac(self.key.encode(), self.agent_id)
 
         result = hmac.compare_digest(response, expected_response)

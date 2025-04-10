@@ -1572,24 +1572,31 @@ async def invoke_get_quote(
         try:
 
             # retrieve pq_key from registrar db
-
-            pq_key_registrar = bytearray(base64.b64decode(exclude_db["pq_key"]))
+            print(type(exclude_db["pq_key"]))
+            pq_key_registrar = bytes(exclude_db["pq_key"], encoding='utf-8')
             logger.info("PQ key retrieved correctly \n")
-
+            logger.info("pq_key retrived from registrar: %s", pq_key_registrar)
+            logger.info("pq_key type: %s", type(pq_key_registrar))
+            logger.info("pq_key length: %s", len(pq_key_registrar))
+            logger.info("DECODING PQ KEY")
+            pq_key_bytes = base64.b64decode(pq_key_registrar)
+            logger.info("pq_key decoded: %s", pq_key_bytes)
+            logger.info("pq_key decoded length: %s", len(pq_key_bytes))
             json_response = json.loads(response.body)
             #print(json_response)
 
             quote = json_response.get("results", {}).get("quote").encode('utf-8')
-            quote_len= json_response.get("results", {}).get("quote_len")
-            sign_sphincs = json_response.get("results", {}).get("sign_sphincs")
-
+            #quote_len= json_response.get("results", {}).get("quote_len")
+            sign_sphincs_list = json_response.get("results", {}).get("sign_sphincs")
+            sign_sphincs = bytes(sign_sphincs_list)
+            logger.info("Size of PQ signature: %s", len(sign_sphincs))
             if sign_sphincs is None:
                 logger.warning("missing_fields", "One or more required fields not found in Agent's response.")
                 failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
                 asyncio.ensure_future(process_agent(agent, states.FAILED, failure))
                 return
 
-            result = verify_pq_signature(quote, sign_sphincs, pq_key_registrar) 
+            result = verify_pq_signature(quote, sign_sphincs, pq_key_bytes) 
 
             if result == True: 
                 logger.info("Verification of PQ signature: Valid")
@@ -2033,14 +2040,24 @@ def get_agents_by_verifier_id(verifier_id: str) -> List[VerfierMain]:
         logger.error("SQLAlchemy Error: %s", e)
     return []
 def verify_pq_signature(message, signature, signer_public_key):
+    # should be str, bytes, bytes
     print(type(message), type(signature), type(signer_public_key))
-    encoded_message = bytes(message)
-    encoded_signature = bytes(signature)
-    encoded_key = bytes(signer_public_key)
-    sigalg = "SPHINCS+-SHAKE-256s-simple"
+
+    # Only encode if not already bytes
+    encoded_message = message if isinstance(message, bytes) else bytes(message, encoding="utf-8")
+    # encoded_signature = signature if isinstance(signature, bytes) else bytes(signature, encoding="utf-8")
+    # encoded_key = signer_public_key if isinstance(signer_public_key, bytes) else bytes(signer_public_key, encoding="utf-8")
+    sigalg = "ML-DSA-87"
     with oqs.Signature(sigalg) as signer:
+        logger.debug("Public key length: %s", len(signer_public_key))
+        logger.debug("Signature length: %s", len(signature))
         with oqs.Signature(sigalg) as verifier:
-            is_valid = verifier.verify(encoded_message, encoded_signature, encoded_key)
+            is_valid = verifier.verify(encoded_message, signature, signer_public_key)
+            if is_valid:
+                logger.info("Signature verification successful")
+            else:
+                logger.info("Signature verification failed")
+                # raise ValueError("Signature verification failed")
             return is_valid
 
 def main() -> None:
