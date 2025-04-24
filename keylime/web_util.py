@@ -298,7 +298,9 @@ def get_tls_options(
         password = None
     else:
         password = config_password
-
+    if logger:
+        logger.debug("Trusted CA: %s", trusted_ca)
+        logger.debug("Certificate: %s", cert)
     return (cert, key, trusted_ca, password), verify_peer_certificate
 
 

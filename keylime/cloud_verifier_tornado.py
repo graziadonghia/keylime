@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.exc import NoResultFound  # pyright: ignore
 
 from keylime import api_version as keylime_api_version
+from keylime.crypto import verify_pq_signature
 from keylime import (
     cloud_verifier_common,
     config,
@@ -30,7 +31,7 @@ from keylime import (
     revocation_notifier,
     signing,
     tornado_requests,
-    web_util,
+    web_util
 )
 from keylime.agentstates import AgentAttestState, AgentAttestStates
 from keylime.common import retry, states, validators
@@ -1574,14 +1575,14 @@ async def invoke_get_quote(
             # retrieve pq_key from registrar db
             print(type(exclude_db["pq_key"]))
             pq_key_registrar = bytes(exclude_db["pq_key"], encoding='utf-8')
-            logger.info("PQ key retrieved correctly \n")
-            logger.info("pq_key retrived from registrar: %s", pq_key_registrar)
-            logger.info("pq_key type: %s", type(pq_key_registrar))
-            logger.info("pq_key length: %s", len(pq_key_registrar))
-            logger.info("DECODING PQ KEY")
+            logger.info("PQ key retrieved correctly from Registrar DB\n")
+            #logger.info("pq_key retrived from registrar: %s", pq_key_registrar)
+            #logger.info("pq_key type: %s", type(pq_key_registrar))
+            #logger.info("pq_key length: %s", len(pq_key_registrar))
+            #logger.info("DECODING PQ KEY")
             pq_key_bytes = base64.b64decode(pq_key_registrar)
-            logger.info("pq_key decoded: %s", pq_key_bytes)
-            logger.info("pq_key decoded length: %s", len(pq_key_bytes))
+            #logger.info("pq_key decoded: %s", pq_key_bytes)
+            #logger.info("pq_key decoded length: %s", len(pq_key_bytes))
             json_response = json.loads(response.body)
             #print(json_response)
 
@@ -1589,7 +1590,7 @@ async def invoke_get_quote(
             #quote_len= json_response.get("results", {}).get("quote_len")
             sign_sphincs_list = json_response.get("results", {}).get("sign_sphincs")
             sign_sphincs = bytes(sign_sphincs_list)
-            logger.info("Size of PQ signature: %s", len(sign_sphincs))
+            logger.info("Size of PQ signature over classically signed TPM quote: %s B", len(sign_sphincs))
             if sign_sphincs is None:
                 logger.warning("missing_fields", "One or more required fields not found in Agent's response.")
                 failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
@@ -1599,7 +1600,7 @@ async def invoke_get_quote(
             result = verify_pq_signature(quote, sign_sphincs, pq_key_bytes) 
 
             if result == True: 
-                logger.info("Verification of PQ signature: Valid")
+                logger.info("Verification of PQ wrap signature: Valid")
                 global counter
                 counter = 0
 
@@ -1766,8 +1767,10 @@ async def notify_error(
 
     tosend = cloud_verifier_common.prepare_error(agent, msgtype, event)
     if "webhook" in notifiers:
+        logger.info("Sending error notification to webhook")
         revocation_notifier.notify_webhook(tosend)
     if "zeromq" in notifiers:
+        logger.info("Sending error notification to zeromq")
         revocation_notifier.notify(tosend)
     if "agent" in notifiers:
         verifier_id = config.get("verifier", "uuid", fallback=cloud_verifier_common.DEFAULT_VERIFIER_ID)
@@ -2039,26 +2042,6 @@ def get_agents_by_verifier_id(verifier_id: str) -> List[VerfierMain]:
     except SQLAlchemyError as e:
         logger.error("SQLAlchemy Error: %s", e)
     return []
-def verify_pq_signature(message, signature, signer_public_key):
-    # should be str, bytes, bytes
-    print(type(message), type(signature), type(signer_public_key))
-
-    # Only encode if not already bytes
-    encoded_message = message if isinstance(message, bytes) else bytes(message, encoding="utf-8")
-    # encoded_signature = signature if isinstance(signature, bytes) else bytes(signature, encoding="utf-8")
-    # encoded_key = signer_public_key if isinstance(signer_public_key, bytes) else bytes(signer_public_key, encoding="utf-8")
-    sigalg = "ML-DSA-87"
-    with oqs.Signature(sigalg) as signer:
-        logger.debug("Public key length: %s", len(signer_public_key))
-        logger.debug("Signature length: %s", len(signature))
-        with oqs.Signature(sigalg) as verifier:
-            is_valid = verifier.verify(encoded_message, signature, signer_public_key)
-            if is_valid:
-                logger.info("Signature verification successful")
-            else:
-                logger.info("Signature verification failed")
-                # raise ValueError("Signature verification failed")
-            return is_valid
 
 def main() -> None:
     """Main method of the Cloud Verifier Server.  This method is encapsulated in a function for packaging to allow it to be

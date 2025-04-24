@@ -130,6 +130,7 @@ def notify_webhook(tosend: Dict[str, Any]) -> None:
     url = config.get("verifier", "webhook_url", section="revocations", fallback="")
     # Check if a url was specified
     if url == "":
+        logger.info("Webhook URL not specified")
         return
 
     # Similarly to notify(), let's convert `tosend' to str to prevent

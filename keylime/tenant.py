@@ -154,7 +154,7 @@ class Tenant:
                 cert, key, trusted_ca, key_password, verify_server_cert, is_client=True, logger=logger
             )
 
-            #logger.info("TLS is enabled.")
+            logger.info("TLS is enabled.")
         else:
             logger.warning("TLS is disabled.")
 
@@ -227,16 +227,18 @@ class Tenant:
             # Try to connect to the agent to get supported version
             if self.registrar_data["mtls_cert"] == "disabled":
                 self.enable_agent_mtls = False
-                # logger.warning(
-                # #     "Warning: mTLS for %s is disabled: the identity of each node will be based on the properties of the TPM only. "
-                #     "Unless you have strict control of your network, it is strongly advised that remote code execution should be disabled, "
-                #     'by setting "payload_script=" and "extract_payload_zip=False" under "[agent]" in agent configuration file.',
-                #     self.agent_fid_str,
-                # )
+                logger.warning(
+                #     "Warning: mTLS for %s is disabled: the identity of each node will be based on the properties of the TPM only. "
+                    "Unless you have strict control of your network, it is strongly advised that remote code execution should be disabled, "
+                    'by setting "payload_script=" and "extract_payload_zip=False" under "[agent]" in agent configuration file.',
+                    self.agent_fid_str,
+                )
                 tls_context = None
             else:
                 # Store the agent self-signed certificate as a string
                 self.verify_custom = self.registrar_data["mtls_cert"]
+                logger.info("Agent self-signed certificate: %s", self.verify_custom)
+                logger.info("Trusted server CA: %s", self.trusted_server_ca)
 
                 if not self.agent_tls_context:
                     self.agent_tls_context = web_util.generate_tls_context(

@@ -142,7 +142,8 @@ def _validate_ima_ng(
                 True,
             )
             return failure
-
+        
+    logger.debug("IMA measurement list valid")
     return failure
 
 

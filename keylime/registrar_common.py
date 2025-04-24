@@ -29,26 +29,7 @@ from keylime.db.keylime_db import DBEngineManager, SessionManager
 from keylime.db.registrar_db import RegistrarMain
 from keylime.tpm import tpm2_objects
 from keylime.tpm.tpm_main import Tpm
-
-def verify_pq_signature(message, signature, signer_public_key):
-   print(type(message), type(signature), type(signer_public_key))
-
-    # Only encode if not already bytes
-    encoded_message = message if isinstance(message, bytes) else bytes(message, encoding="utf-8")
-    encoded_signature = signature if isinstance(signature, bytes) else bytes(signature, encoding="utf-8")
-    encoded_key = signer_public_key if isinstance(signer_public_key, bytes) else bytes(signer_public_key, encoding="utf-8")
-    sigalg = "ML-DSA-87"
-    with oqs.Signature(sigalg) as signer:
-        # print public key expected length
-        logger.debug("Public key expected length: %s", len(signer.length_public_key))
-        logger.debug("Public key length: %s", len(encoded_key))
-        
-        # print signature expected length
-        logger.debug("Signature expected length: %s", len(signer.length_signature))
-        logger.debug("Signature length: %s", len(encoded_signature))
-        with oqs.Signature(sigalg) as verifier:
-            is_valid = verifier.verify(encoded_message, encoded_signature, encoded_key)
-            return is_valid
+from keylime.crypto import verify_pq_signature
 
 logger = keylime_logging.init_logging("registrar")
 

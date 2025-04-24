@@ -20,6 +20,13 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 # algorithms
 aes_block_size = 16
 
+def verify_pq_signature(message, signature, signer_public_key):
+    encoded_message = message if isinstance(message, bytes) else bytes(message, encoding="utf-8")
+    sigalg = "ML-DSA-87"
+    with oqs.Signature(sigalg) as signer:
+        with oqs.Signature(sigalg) as verifier:
+            is_valid = verifier.verify(encoded_message, signature, signer_public_key)
+            return is_valid
 
 def rsa_import_pubkey(pubkey: Union[str, bytes]) -> RSAPublicKey:
     """Import a public key
