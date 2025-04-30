@@ -112,7 +112,7 @@ class Tenant:
         self.verifier_port = config.get("tenant", "verifier_port")
         self.registrar_ip = config.get("tenant", "registrar_ip")
         self.registrar_port = config.get("tenant", "registrar_port")
-        self.api_version = keylime_api_version.current_version()
+        self.api_version = "2.3"
         self.enable_agent_mtls = config.getboolean("tenant", "enable_agent_mtls")
         self.request_timeout = config.getint("tenant", "request_timeout", fallback=60)
         self.retry_interval = config.getfloat("tenant", "retry_interval")
@@ -136,9 +136,13 @@ class Tenant:
 
         if not trusted_ca:
             logger.warning("No certificates provided in 'trusted_server_ca'")
+        else:
+            logger.info("Certificate provided in 'trusted_server_ca': %s", trusted_ca)
 
         if cert and not os.path.isfile(cert):
             logger.warning("Could not find file %s provided in 'client_cert'", cert)
+        else:
+            logger.info("Certificate provided in 'client_cert': %s", cert)
 
         if key and not os.path.isfile(key):
             logger.warning("Could not find file %s provided in 'client_key'", key)
@@ -154,7 +158,6 @@ class Tenant:
                 cert, key, trusted_ca, key_password, verify_server_cert, is_client=True, logger=logger
             )
 
-            logger.info("TLS is enabled.")
         else:
             logger.warning("TLS is disabled.")
 
@@ -203,6 +206,7 @@ class Tenant:
             if self.agent_ip is None:
                 if self.registrar_data["ip"] is not None:
                     self.agent_ip = self.registrar_data["ip"]
+                    logger.info("Using IP %s from the agent", self.agent_ip)
                 else:
                     raise UserError("No Ip was specified or found in the Registrar")
 
@@ -223,8 +227,12 @@ class Tenant:
         # Default to 1.0 if the agent did not send a mTLS certificate
         if self.registrar_data.get("mtls_cert", None) is None and self.supported_version is None:
             self.supported_version = "1.0"
+            logger.warning(
+                "No mTLS certificate provided by the agent. Defaulting to API version %s", self.supported_version
+            )
         else:
             # Try to connect to the agent to get supported version
+            logger.info("Trying to connect to %s to get supported API version", self.agent_fid_str)
             if self.registrar_data["mtls_cert"] == "disabled":
                 self.enable_agent_mtls = False
                 logger.warning(
@@ -237,7 +245,7 @@ class Tenant:
             else:
                 # Store the agent self-signed certificate as a string
                 self.verify_custom = self.registrar_data["mtls_cert"]
-                logger.info("Agent self-signed certificate: %s", self.verify_custom)
+                #logger.info("Agent self-signed certificate: %s", self.verify_custom)
                 logger.info("Trusted server CA: %s", self.trusted_server_ca)
 
                 if not self.agent_tls_context:
@@ -608,11 +616,15 @@ class Tenant:
             "pq_key": self.registrar_data["pq_key"],
         }
         json_message = json.dumps(data)
+        logger.info("Sending message to verifier:")
+        #logger.info(json_message)
         do_cv = RequestsClient(self.verifier_base_url, True, tls_context=self.tls_context)
+        logger.info("Adding %s to %s", self.agent_fid_str, self.verifier_fid_str)
+        logger.info(f'/v{self.api_version}/agents/{self.agent_uuid}')
         response = do_cv.post(
             (f"/v{self.api_version}/agents/{self.agent_uuid}"), data=json_message, timeout=self.request_timeout
         )
-
+        logger.info("Response from %s: %s", self.verifier_fid_str, response.status_code)
         if response.status_code == 503:
             raise UserError(
                 f"Cannot connect to {self.verifier_fid_str} while adding {self.agent_fid_str}. Connection refused."
@@ -1125,14 +1137,14 @@ class Tenant:
             )
 
         quote = response_json["results"]["quote"]
-        logger.debug("Tenant received quote from %s: %s", self.agent_fid_str, quote)
+        logger.info("Tenant received quote from %s: %s", self.agent_fid_str, quote)
 
         public_key = response_json["results"]["pubkey"]
-        logger.debug("Tenant received public key from %s: %s", self.agent_fid_str, public_key)
+        logger.info("Tenant received public key from %s: %s", self.agent_fid_str, public_key)
 
         # Ensure hash_alg is in accept_tpm_hash_algs list
         hash_alg = response_json["results"]["hash_alg"]
-        logger.debug("Tenant received hash algorithm from %s: %s", self.agent_fid_str, hash_alg)
+        logger.info("Tenant received hash algorithm from %s: %s", self.agent_fid_str, hash_alg)
         if not algorithms.is_accepted(
             hash_alg, config.getlist("tenant", "accept_tpm_hash_algs")
         ) or not algorithms.Hash.is_recognized(hash_alg):
@@ -1148,7 +1160,7 @@ class Tenant:
 
         # Ensure sign_alg is in accept_tpm_encryption_algs list
         sign_alg = response_json["results"]["sign_alg"]
-        logger.debug("Tenant received signing algorithm from %s: %s", self.agent_fid_str, sign_alg)
+        logger.info("Tenant received signing algorithm from %s: %s", self.agent_fid_str, sign_alg)
         if not algorithms.is_accepted(sign_alg, config.getlist("tenant", "accept_tpm_signing_algs")):
             raise UserError(f"TPM Quote from {self.agent_fid_str} is using an unaccepted signing algorithm: {sign_alg}")
 
@@ -1162,7 +1174,7 @@ class Tenant:
             encrypted_U = crypto.rsa_encrypt(crypto.rsa_import_pubkey(public_key), self.U)
 
             b64_encrypted_u = base64.b64encode(encrypted_U)
-            logger.debug("b64_encrypted_u: %s", b64_encrypted_u.decode("utf-8"))
+            logger.info("b64_encrypted_u: %s", b64_encrypted_u.decode("utf-8"))
             data = {"encrypted_key": b64_encrypted_u.decode("utf-8"), "auth_tag": self.auth_tag}
 
             if self.payload is not None:

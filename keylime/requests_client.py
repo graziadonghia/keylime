@@ -35,6 +35,7 @@ class RequestsClient:
             if isinstance(value, dict):
                 value = self.__deep_merge(getattr(self.session, arg), value)
             setattr(self.session, arg, value)
+        
 
     def __enter__(self) -> "RequestsClient":
         return self
