@@ -317,7 +317,7 @@ class RegistrarAgent(PersistableModel):
         self._prepare_regcount()
 
         pq_key_list = data.get("pq_key") # list of 2592 integers, same as Rust
-        logger.info("Post-Quantum (PQ) public key received from agent")
+        logger.info("MLDSA-87 public key received from agent")
         #logger.info("pq_key_list = %s", pq_key_list)
         pq_key = bytes(pq_key_list)
         #logger.info("pq_key_list type = %s", type(pq_key_list))
@@ -332,7 +332,7 @@ class RegistrarAgent(PersistableModel):
         self.pq_key = pq_key_b64
 
         #self._validate_pq_key(pq_key)
-        logger.info("PQ public key registered correctly in DB")
+        logger.info("MLDSA-87 public key registered correctly in DB")
        
     def produce_ak_challenge(self):
         if not self.ek_tpm or not self.aik_tpm:

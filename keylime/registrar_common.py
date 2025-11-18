@@ -151,7 +151,7 @@ class ProtectedHandler(BaseHandler):
                 "regcount": agent.regcount,
                 "pq_key": agent.pq_key,
             }
-            logger.debug("PQ KEY")
+            #logger.debug("PQ KEY")
             logger.debug(agent.pq_key)
             if agent.virtual:  # pyright: ignore
                 response["provider_keys"] = agent.provider_keys
@@ -453,8 +453,8 @@ class UnprotectedHandler(BaseHandler):
 
            
             pq_key = json_body["pq_key"]
-            logger.debug("PQ KEY")
-            logger.debug(pq_key)
+            logger.info("MLDSA-87 KEY")
+            logger.info(pq_key)
             # Add values to database
             d: Dict[str, Any] = {
                 "agent_id": agent_id,

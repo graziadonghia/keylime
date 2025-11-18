@@ -66,7 +66,7 @@ class AgentsController(Controller):
         #logger.info(f"pq_key = '{pq_key}'")
         pq_key_bytes = base64.b64decode(pq_key)
         pq_key_int_list = list(pq_key_bytes)
-        logger.info(f"Size of PQ signature of challenge = {len(challenge_sig)} B")
+        logger.info(f"Size of MLDSA-87 signature of challenge = {len(challenge_sig)} B")
         # Convert the challenge signature to bytes
         challenge_sig_bytes = bytes(challenge_sig)
         # convert the challenge signature to a string

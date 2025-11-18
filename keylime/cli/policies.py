@@ -66,7 +66,7 @@ def process_policy(args: ArgsType) -> Tuple[Dict[str, Any], Optional[str], str, 
         tpm_policy_str = args["tpm_policy"]
 
     tpm_policy = tpm_util.readPolicy(tpm_policy_str)
-    logger.info("TPM PCR Mask from policy is %s", tpm_policy["mask"])
+    # logger.info("TPM PCR Mask from policy is %s", tpm_policy["mask"])
 
     if len(args["ima_sign_verification_keys"]) > 0:
         # Auto-enable IMA (or-bit mask)

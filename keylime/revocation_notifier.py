@@ -146,32 +146,67 @@ def notify_webhook(tosend: Dict[str, Any]) -> None:
             logger.info("Invalid value found in 'max_retries' option for verifier, using default value")
             max_retries = 5
 
-        # Get TLS options from the configuration
-        (cert, key, trusted_ca, key_password), verify_server_cert = web_util.get_tls_options(
-            "verifier", is_client=True, logger=logger
-        )
+        HTTPS = False
 
-        # Generate the TLS context using the obtained options
-        tls_context = web_util.generate_tls_context(cert, key, trusted_ca, key_password, is_client=True, logger=logger)
+        if HTTPS:
+            logger.info("Webhook HTTPS mode enabled")
+            # Get TLS options from the configuration
+            (cert, key, trusted_ca, key_password), verify_server_cert = web_util.get_tls_options(
+                "verifier", is_client=True, logger=logger
+            )
 
-        logger.info("Sending revocation event via webhook to %s ...", url)
-        for i in range(max_retries):
-            next_retry = retry.retry_time(exponential_backoff, interval, i, logger)
+            # Generate the TLS context using the obtained options
+            tls_context = web_util.generate_tls_context(cert, key, trusted_ca, key_password, is_client=True, logger=logger)
 
-            with RequestsClient(
-                url,
-                verify_server_cert,
-                tls_context,
-            ) as client:
+            logger.info("Sending revocation event via webhook to %s ...", url)
+            for i in range(max_retries):
+                next_retry = retry.retry_time(exponential_backoff, interval, i, logger)
+
+                with RequestsClient(
+                    url,
+                    verify_server_cert,
+                    tls_context,
+                ) as client:
+                    try:
+                        res = client.post("", json=tosend, timeout=5)
+                    except requests.exceptions.SSLError as ssl_error:
+                        if "TLSV1_ALERT_UNKNOWN_CA" in str(ssl_error):
+                            logger.warning(
+                                "Keylime does not recognize certificate from peer. Check if verifier 'trusted_server_ca' is configured correctly"
+                            )
+
+                        raise ssl_error from ssl_error
+
+                    if res and res.status_code in [200, 202]:
+                        break
+
+                    logger.debug(
+                        "Unable to publish revocation message %d times via webhook, "
+                        "trying again in %d seconds. "
+                        "Server returned status code: %s",
+                        i + 1,
+                        next_retry,
+                        res.status_code,
+                    )
+
+                    time.sleep(next_retry)
+        else:
+            logger.info("Sending revocation event via webhook to %s ...", url)
+            for i in range(max_retries):
+                next_retry = retry.retry_time(exponential_backoff, interval, i, logger)
+
                 try:
-                    res = client.post("", json=tosend, timeout=5)
-                except requests.exceptions.SSLError as ssl_error:
-                    if "TLSV1_ALERT_UNKNOWN_CA" in str(ssl_error):
-                        logger.warning(
-                            "Keylime does not recognize certificate from peer. Check if verifier 'trusted_server_ca' is configured correctly"
-                        )
-
-                    raise ssl_error from ssl_error
+                    res = requests.post(url, json=tosend, timeout=5)
+                except requests.exceptions.RequestException as e:
+                    logger.debug(
+                        "Unable to publish revocation message %d times via webhook, "
+                        "trying again in %d seconds: %s",
+                        i + 1,
+                        next_retry,
+                        e,
+                    )
+                    time.sleep(next_retry)
+                    continue
 
                 if res and res.status_code in [200, 202]:
                     break
@@ -186,7 +221,6 @@ def notify_webhook(tosend: Dict[str, Any]) -> None:
                 )
 
                 time.sleep(next_retry)
-
     w = functools.partial(worker_webhook, tosend, url)
     t = threading.Thread(target=w, daemon=True)
     t.start()

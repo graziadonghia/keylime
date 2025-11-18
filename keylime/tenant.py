@@ -1137,10 +1137,10 @@ class Tenant:
             )
 
         quote = response_json["results"]["quote"]
-        logger.info("Tenant received quote from %s: %s", self.agent_fid_str, quote)
+        # logger.info("Tenant received quote from %s: %s", self.agent_fid_str, quote)
 
         public_key = response_json["results"]["pubkey"]
-        logger.info("Tenant received public key from %s: %s", self.agent_fid_str, public_key)
+        # logger.info("Tenant received public key from %s: %s", self.agent_fid_str, public_key)
 
         # Ensure hash_alg is in accept_tpm_hash_algs list
         hash_alg = response_json["results"]["hash_alg"]

@@ -1575,7 +1575,7 @@ async def invoke_get_quote(
             # retrieve pq_key from registrar db
             print(type(exclude_db["pq_key"]))
             pq_key_registrar = bytes(exclude_db["pq_key"], encoding='utf-8')
-            logger.info("PQ key retrieved correctly from Registrar DB\n")
+            logger.info("MLDSA-87 key retrieved correctly from Registrar DB\n")
             #logger.info("pq_key retrived from registrar: %s", pq_key_registrar)
             #logger.info("pq_key type: %s", type(pq_key_registrar))
             #logger.info("pq_key length: %s", len(pq_key_registrar))
@@ -1590,7 +1590,7 @@ async def invoke_get_quote(
             #quote_len= json_response.get("results", {}).get("quote_len")
             sign_sphincs_list = json_response.get("results", {}).get("sign_sphincs")
             sign_sphincs = bytes(sign_sphincs_list)
-            logger.info("Size of PQ signature over classically signed TPM quote: %s B", len(sign_sphincs))
+            logger.info("Size of MLDSA-87 signature over classically signed TPM quote: %s B", len(sign_sphincs))
             if sign_sphincs is None:
                 logger.warning("missing_fields", "One or more required fields not found in Agent's response.")
                 failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
@@ -1600,16 +1600,16 @@ async def invoke_get_quote(
             result = verify_pq_signature(quote, sign_sphincs, pq_key_bytes) 
 
             if result == True: 
-                logger.info("Verification of PQ wrap signature: Valid")
+                logger.info("Verification of MLDSA-87 wrap signature: Valid")
                 global counter
                 counter = 0
 
             else:
-                logger.error("Verification of PQ signature: Not valid")
+                logger.error("Verification of MLDSA-87 signature: Not valid")
                 counter +=1 
                 if counter == 8:
                     failure = Failure(Component.QUOTE_VALIDATION)
-                    failure.add_event("invalid PQ signature",{"message": "PQ Public Key is not corresponding to the correct one"},False)
+                    failure.add_event("invalid MLDSA-87 signature",{"message": "MLDSA-87 Public Key is not corresponding to the correct one"},False)
                     asyncio.ensure_future(process_agent(agent, states.INVALID_QUOTE, failure))
             # validate the cloud agent response
             if "provide_V" not in agent:
