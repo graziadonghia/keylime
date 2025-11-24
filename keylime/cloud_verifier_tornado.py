@@ -1588,16 +1588,16 @@ async def invoke_get_quote(
 
             quote = json_response.get("results", {}).get("quote").encode('utf-8')
             #quote_len= json_response.get("results", {}).get("quote_len")
-            sign_sphincs_list = json_response.get("results", {}).get("sign_sphincs")
-            sign_sphincs = bytes(sign_sphincs_list)
-            logger.info("Size of MLDSA-87 signature over classically signed TPM quote: %s B", len(sign_sphincs))
-            if sign_sphincs is None:
+            pq_wrap_signature_list = json_response.get("results", {}).get("pq_wrap_signature")
+            pq_wrap_signature = bytes(pq_wrap_signature_list)
+            logger.info("Size of MLDSA-87 signature over classically signed TPM quote: %s B", len(pq_wrap_signature))
+            if pq_wrap_signature is None:
                 logger.warning("missing_fields", "One or more required fields not found in Agent's response.")
                 failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
                 asyncio.ensure_future(process_agent(agent, states.FAILED, failure))
                 return
 
-            result = verify_pq_signature(quote, sign_sphincs, pq_key_bytes) 
+            result = verify_pq_signature(quote, pq_wrap_signature, pq_key_bytes) 
 
             if result == True: 
                 logger.info("Verification of MLDSA-87 wrap signature: Valid")

@@ -320,19 +320,21 @@ class RegistrarAgent(PersistableModel):
         logger.info("MLDSA-87 public key received from agent")
         #logger.info("pq_key_list = %s", pq_key_list)
         pq_key = bytes(pq_key_list)
-        #logger.info("pq_key_list type = %s", type(pq_key_list))
-        #logger.info("Type of pq_key = %s", type(pq_key))
+        logger.info("pq_key_list type = %s", type(pq_key_list))
+        logger.info("Type of pq_key = %s", type(pq_key))
+        logger.info("Size of pq_key = %s B", len(pq_key))
         
         # Use Base64 to encode the bytes to an ASCII string.
         pq_key_b64 = base64.b64encode(pq_key).decode("ascii")
-        #logger.info("PQ key (Base64) = %s", pq_key_b64)
-        #logger.info("PQ key length (Base64) = %s", len(pq_key_b64))
+        logger.info("PQ key (Base64) = %s", pq_key_b64)
+        logger.info("PQ key length (Base64) = %s", len(pq_key_b64))
 
         # Store the Base64 encoded string in your model.
         self.pq_key = pq_key_b64
 
         #self._validate_pq_key(pq_key)
         logger.info("MLDSA-87 public key registered correctly in DB")
+
        
     def produce_ak_challenge(self):
         if not self.ek_tpm or not self.aik_tpm:
