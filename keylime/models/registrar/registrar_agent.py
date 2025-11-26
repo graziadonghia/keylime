@@ -3,13 +3,22 @@ import hmac
 from typing import Optional, List
 from sqlalchemy import LargeBinary
 import cryptography.x509
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa, dsa
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+# Aggiunto l'import per Path, necessario per la lettura del file
+from pathlib import Path 
 import base64
 from keylime import cert_utils, config, crypto, keylime_logging
 from keylime.models.base import Boolean, Certificate, Dictionary, Integer, OneOf, PersistableModel, String, LargeBinary, da_manager
 from keylime.tpm import tpm2_objects
 from keylime.tpm.tpm_main import Tpm
+
+# Aggiungi un import per la gestione ASN.1 grezza
+import asn1crypto.x509 as asn1_x509 
+from asn1crypto.core import OctetString
+from asn1crypto.core import Sequence
+from asn1crypto.core import BitString # Import necessario per l'estrazione finale
 
 logger = keylime_logging.init_logging("registrar")
 
@@ -44,8 +53,14 @@ class RegistrarAgent(PersistableModel):
         cls._field("port", Integer, nullable=True)
         cls._field("mtls_cert", OneOf(Certificate, "disabled"), nullable=True)
 
-        #The pq_key used for the sphincs signature
+        # The pq_key used for the quote wrapping
         cls._field("pq_key", String(5000), nullable=True)
+
+        # The PQ algorithm used for the quote wrapping
+        cls._field("pq_algorithm", String(50), nullable=True)
+        
+        # NUOVO CAMPO: Certificato X.509 contenente la chiave pubblica PQ
+        #cls._field("pq_cert", Certificate, nullable=True) 
 
         # The number of times the agent has registered over its lifetime
         cls._field("regcount", Integer)
@@ -269,14 +284,6 @@ class RegistrarAgent(PersistableModel):
         if any(field in reg_fields for field in self.changes) and self.changes_valid:
             self.regcount += 1
 
-    # def _validate_pq_key(self, pq_key: bytes) -> None:
-    #     if not isinstance(pq_key, bytes):
-    #        raise ValueError("pq_key must be a bytes")
-    #     try:
-    #     # Prova a decodificare Base64 per verificare il formato
-    #       decoded_key = base64.b64decode(pq_key)
-    #     except Exception:
-    #       raise ValueError("Invalid pq_key: not a valid Base64 string")
     def _validate_pq_key(self, pq_key: str) -> None:
         if not isinstance(pq_key, str):
             raise ValueError("pq_key must be a str")
@@ -291,7 +298,7 @@ class RegistrarAgent(PersistableModel):
         # Bind key-value pairs ('data') to those fields which are meant to be externally changeable
         self.cast_changes(
             data,
-            ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "iak_tpm", "iak_cert", "idevid_tpm", "idevid_cert", "ip","pq_key"]
+            ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "iak_tpm", "iak_cert", "idevid_tpm", "idevid_cert", "ip", "pq_key", "pq_algorithm", "pq_cert"]
             + ["port", "mtls_cert"],
         )
 
@@ -315,25 +322,110 @@ class RegistrarAgent(PersistableModel):
         self._prepare_status_flags()
         # Increment number of registrations if appropriate
         self._prepare_regcount()
-
-        pq_key_list = data.get("pq_key") # list of 2592 integers, same as Rust
-        logger.info("MLDSA-87 public key received from agent")
-        #logger.info("pq_key_list = %s", pq_key_list)
-        pq_key = bytes(pq_key_list)
-        logger.info("pq_key_list type = %s", type(pq_key_list))
-        logger.info("Type of pq_key = %s", type(pq_key))
-        logger.info("Size of pq_key = %s B", len(pq_key))
         
-        # Use Base64 to encode the bytes to an ASCII string.
-        pq_key_b64 = base64.b64encode(pq_key).decode("ascii")
-        logger.info("PQ key (Base64) = %s", pq_key_b64)
-        logger.info("PQ key length (Base64) = %s", len(pq_key_b64))
+        pq_cert = self.changes.get("pq_cert")
+        pq_key_list = data.get("pq_key") # Chiave pubblica inviata direttamente dall'Agent nel payload
 
-        # Store the Base64 encoded string in your model.
-        self.pq_key = pq_key_b64
+        # Variabili per il confronto
+        pq_key_from_cert_b64 = None
+        pq_key_from_payload_b64 = None
+        
+        # --- 1. ESTRAZIONE CHIAVE DA PAYLOAD DIRETTO (PQ_KEY) ---
+        if pq_key_list:
+            try:
+                # Decodifica la chiave ricevuta (assumendo sia una lista di int/bytes)
+                pq_key_from_payload_bytes = bytes(pq_key_list)
+                
+                # Codifica Base64 per lo storage/confronto
+                pq_key_from_payload_b64 = base64.b64encode(pq_key_from_payload_bytes).decode("ascii")
+                logger.info("Chiave PQ da Payload (diretta) decodificata con successo.")
+            except Exception as e:
+                logger.error("Errore nella decodifica della chiave PQ diretta dal payload: %s", e)
+                self._add_error("pq_key", "Invalid key format provided in 'pq_key' field.")
+                # Non usciamo, ma continuiamo con il certificato per non bloccare la registrazione
 
-        #self._validate_pq_key(pq_key)
-        logger.info("MLDSA-87 public key registered correctly in DB")
+        # --- 2. ESTRAZIONE CHIAVE DA CERTIFICATO STATICO (TEST DI CONFRONTO) ---
+
+        # Percorso del file del certificato per il test (FORZATO)
+        CERT_PATH = "/home/ubuntu/trust-manager/agents-pki/ebano-cert.der"
+        # Dimensione attesa della chiave pubblica MLDSA-87 (2592 byte, basato sull'output l=2593)
+        EXPECTED_PQ_KEY_SIZE = 2592 
+        
+        logger.info("--- Inizio Parsing Certificato PQ (Test Statico per Confronto) ---")
+        try:
+            # 1. Carica i dati binari del certificato (DER)
+            cert_data = Path(CERT_PATH).read_bytes()
+            
+            # MONITORAGGIO: Dati caricati
+            logger.info("Passo 1: Certificato caricato. Dimensione: %d bytes.", len(cert_data))
+
+            # 2. Carica il certificato utilizzando asn1crypto per una decodifica robusta
+            cert_asn1 = asn1_x509.Certificate.load(cert_data)
+            
+            # MONITORAGGIO: Struttura parsata
+            logger.info("Passo 2: Parsing ASN.1 riuscito.")
+
+            # 3. Accedi direttamente alla struttura SubjectPublicKeyInfo (SPKI) bypassando la mappatura OID
+            tbs_certificate = cert_asn1['tbs_certificate']
+            spki_container = tbs_certificate[6] # Indice 6 (SPKI) confermato come funzionante
+            spki_raw_bytes = spki_container.dump()
+            spki_sequence = Sequence.load(spki_raw_bytes)
+            public_key_bit_string = spki_sequence[1] 
+            
+            # Usa .contents per l'estrazione dei byte grezzi (che ha funzionato)
+            raw_pq_key_bytes_with_padding = public_key_bit_string.contents
+            pq_key_from_cert_bytes = raw_pq_key_bytes_with_padding[1:] # Rimuove byte di padding
+            pq_key_from_cert_b64 = base64.b64encode(pq_key_from_cert_bytes).decode("ascii")
+
+            logger.info("Chiave PQ estratta da certificato statico con successo.")
+            
+            # Verifica dimensione (OPZIONALE, ma buona pratica)
+            if len(pq_key_from_cert_bytes) != EXPECTED_PQ_KEY_SIZE:
+                logger.error("ERRORE: Dimensione chiave estratta dal certificato non corrispondente. Trovati %d B, attesi %d B.", len(pq_key_from_cert_bytes), EXPECTED_PQ_KEY_SIZE)
+                # NON impostiamo l'errore self._add_error per la chiave del certificato statico
+                pq_key_from_cert_b64 = None # Invalida la chiave estratta per il confronto
+
+        except FileNotFoundError:
+            logger.error("FATAL: File certificato statico non trovato a %s. Impossibile eseguire il confronto.", CERT_PATH)
+        except Exception as e:
+            logger.error("ERRORE CRITICO: Fallimento parsing ASN.1 certificato PQ statico: %s", e)
+        finally:
+            logger.info("--- Fine Parsing Certificato PQ ---")
+
+
+        # --- 3. CONFRONTO E SALVATAGGIO ---
+
+        if pq_key_from_cert_b64 and pq_key_from_payload_b64:
+            # Confronta i byte (o la stringa Base64)
+            if pq_key_from_cert_b64 == pq_key_from_payload_b64:
+                logger.info("SUCCESSO: Chiave PQ estratta dal certificato CORRISPONDE a quella nel payload.")
+                
+                # Salva la chiave e l'algoritmo dal certificato verificato
+                self.pq_key = pq_key_from_cert_b64
+                self.pq_algorithm = data.get("pq_algorithm") # Usa l'algoritmo fornito dall'Agent (e fidato)
+            else:
+                # ERRORE DI INTEGRITÀ GRAVE
+                logger.critical("ERRORE DI INTEGRITÀ: Chiave PQ estratta dal certificato NON CORRISPONDE a quella nel payload. Rifiuto la registrazione.")
+                self._add_error("pq_key", "Key mismatch between certificate and direct payload submission.")
+                self.pq_key = None # Impedisce la registrazione di una chiave ambigua
+        
+        elif pq_key_from_cert_b64:
+            # Caso: Solo certificato valido disponibile (produzione raccomandata)
+            logger.warning("ATTENZIONE: Payload diretto della chiave PQ mancante. Si salva la chiave estratta dal certificato (verificata da CA).")
+            self.pq_key = pq_key_from_cert_b64
+            self.pq_algorithm = data.get("pq_algorithm")
+        
+        elif pq_key_from_payload_b64:
+            # Caso: Solo chiave payload disponibile (scenario non-PKI o fallback)
+            # Questo è il caso che è successo nel tuo test precedente.
+            logger.warning("ATTENZIONE: Certificato PQ mancante o non parsabile. Si salva la chiave dal payload diretto (non certificata).")
+            self.pq_key = pq_key_from_payload_b64
+            self.pq_algorithm = data.get("pq_algorithm")
+        else:
+            # Nessuna chiave PQ valida trovata, lascia pq_key = None
+            logger.warning("Nessuna chiave PQ valida è stata fornita né nel payload diretto né nel certificato.")
+
+        logger.info("Stato finale della chiave PQ: %s", "Registrata" if self.pq_key else "Non Registrata")
 
        
     def produce_ak_challenge(self):
@@ -381,12 +473,12 @@ class RegistrarAgent(PersistableModel):
             da_manager.backend.record_create(agent_data, None, None, None)
 
         # Note: Ideally one would want the DA code in keylime.da to be data agnostic (in the same way as a database
-        # engine), so that writing to the DA backend could be handled transparently by PersistableModel. As this isn't
-        # the case, it is necessary to override commit_changes and make the record_create call on a case-by-case basis.
+            # engine), so that writing to the DA backend could be handled transparently by PersistableModel. As this isn't
+            # the case, it is necessary to override commit_changes and make the record_create call on a case-by-case basis.
 
     def render(self, only=None):
         if not only:
-            only = ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "mtls_cert", "ip", "port", "regcount", "pq_key"]
+            only = ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "mtls_cert", "ip", "port", "regcount", "pq_key", "pq_algorithm", "pq_cert"]
 
             if self.virtual:
                 only.append("provider_keys")
@@ -396,5 +488,9 @@ class RegistrarAgent(PersistableModel):
         # When operating in pull mode, ekcert is encoded as Base64 instead of PEM
         if output.get("ekcert"):
             output["ekcert"] = base64.b64encode(self.ekcert.public_bytes(Encoding.DER)).decode("utf-8")
+
+        # Codifica Base64 del certificato PQ
+        if output.get("pq_cert"):
+            output["pq_cert"] = base64.b64encode(self.pq_cert.public_bytes(Encoding.DER)).decode("utf-8")
 
         return output

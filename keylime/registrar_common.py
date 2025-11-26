@@ -150,9 +150,11 @@ class ProtectedHandler(BaseHandler):
                 "port": agent.port,
                 "regcount": agent.regcount,
                 "pq_key": agent.pq_key,
+                "pq_algorithm": agent.pq_algorithm,
             }
             #logger.debug("PQ KEY")
-            logger.debug(agent.pq_key)
+            #logger.debug(agent.pq_key)
+            logger.debug("PQ ALGORITHM: %s", agent.pq_algorithm)
             if agent.virtual:  # pyright: ignore
                 response["provider_keys"] = agent.provider_keys
 
@@ -307,6 +309,7 @@ class UnprotectedHandler(BaseHandler):
             idevid_required = tpm_identity == "iak_idevid"
             ek_required = tpm_identity == "ek_cert"
             pq_key = ""
+            pq_algorithm = ""
 
 
                   
@@ -453,8 +456,7 @@ class UnprotectedHandler(BaseHandler):
 
            
             pq_key = json_body["pq_key"]
-            logger.info("MLDSA-87 KEY")
-            logger.info(pq_key)
+            pq_algorithm = json_body["pq_algorithm"]
             # Add values to database
             d: Dict[str, Any] = {
                 "agent_id": agent_id,
@@ -474,6 +476,7 @@ class UnprotectedHandler(BaseHandler):
                 "provider_keys": {},
                 "regcount": regcount,
                 "pq_key":  pq_key,
+                "pq_algorithm": pq_algorithm,
             }
 
 

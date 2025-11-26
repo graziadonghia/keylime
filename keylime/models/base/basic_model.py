@@ -320,18 +320,6 @@ class BasicModel(ABC, metaclass=BasicModelMeta):
         for name, value in changes.items():
             if (name not in permitted) or (name not in self.__class__.fields):
                 continue
-
-            #   # Controlla se l'elemento è 'pq_key' e convertilo in LargeBinary
-            # if name == "pq_key":
-            #     try:
-            #         # Decodifica da base64 in bytes
-            #         decoded_value = base64.b64decode(value)
-            #         # Passa il valore decodificato alla funzione change, senza bisogno di un bind_processor
-            #         value = decoded_value
-            #         print(value)
-            #     except Exception as e:
-            #         # Gestione dell'errore, se la conversione fallisce
-            #         self._add_error(name, f"Failed to decode and convert pq_key: {str(e)}")
                 
             self.change(name, value)
 

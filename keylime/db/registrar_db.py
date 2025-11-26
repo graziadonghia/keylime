@@ -30,3 +30,4 @@ class RegistrarMain(Base):
     provider_keys = Column(JSONPickleType(pickler=JSONPickler))
     regcount = Column(Integer)
     pq_key = Column(String(4000))
+    pq_algorithm = Column(String(100))

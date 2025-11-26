@@ -34,7 +34,8 @@ CREATE TABLE public.registrarmain (
     active integer,
     provider_keys text,
     regcount integer,
-    pq_key character varying(4000)
+    pq_key character varying(4000),
+    pq_algorithm character varying(100)
 );
 
 
