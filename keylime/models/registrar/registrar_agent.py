@@ -20,8 +20,24 @@ from asn1crypto.core import OctetString
 from asn1crypto.core import Sequence
 from asn1crypto.core import BitString # Import necessario per l'estrazione finale
 
-logger = keylime_logging.init_logging("registrar")
+# NUOVO IMPORT OQS PER GESTIRE LA CRITTOGRAFIA PQ
+import oqs # Assumiamo che liboqs-python sia installato
+# NUOVO IMPORT CTYPES
+import ctypes
+import os
+import tempfile
 
+# IMPORTA IL WRAPPER DAL MODULO ESTERNO
+# Assicurati che pq_auth_wrapper.py sia nella stessa cartella di questo file
+try:
+    from .pq_auth_wrapper import PQVerifier
+except ImportError:
+    # Fallback se eseguito fuori dal package context o se il path è diverso
+    import sys
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from pq_auth_wrapper import PQVerifier
+
+logger = keylime_logging.init_logging("registrar")
 
 class RegistrarAgent(PersistableModel):
     @classmethod
@@ -293,12 +309,76 @@ class RegistrarAgent(PersistableModel):
         except Exception:
             raise ValueError("Invalid pq_key: not a valid Base64 string")
 
+    def _verify_pq_cert_trust_status(self, target_cert_bytes: bytes) -> bool:
+        """
+        Verifica la catena di fiducia del certificato PQ (che non ha ancora un oggetto Certificate)
+        con il certificato CA statico chiamando il wrapper Python che usa la lib C di OpenSSL (Aurora).
+        """
+        CA_CERT_PATH = "/home/ubuntu/trust-manager/agents-pki/qubip-tls-ca-cert.pem"
+        
+        # Nota: Il percorso del wrapper .so e dell'ambiente è ora gestito all'interno di PQVerifier o pq_auth_wrapper
+        # Assumiamo che pq_auth_wrapper.py abbia la configurazione corretta (path statico e RTLD_DEEPBIND)
+        
+        # Questo path deve puntare alla cartella build/lib64 della tua installazione custom
+        # È comunque utile settarlo qui per il contesto del processo corrente se il wrapper non lo fa
+        AURORA_PROVIDER_DIR = "/home/ubuntu/quantumsafe_openssl/build/lib64"
+        
+        if not os.path.exists(CA_CERT_PATH):
+            logger.error("FATAL: Certificato CA non trovato a %s.", CA_CERT_PATH)
+            return False
+
+        # Impostazione di sicurezza per l'ambiente
+        if "OPENSSL_MODULES" not in os.environ:
+            logger.info("Forzatura OPENSSL_MODULES a: %s", AURORA_PROVIDER_DIR)
+            os.environ["OPENSSL_MODULES"] = AURORA_PROVIDER_DIR
+        
+        # Imposta LD_LIBRARY_PATH per aiutare il sistema a trovare le dipendenze (libcrypto.so.3) se non statiche
+        # Nota: se il wrapper è compilato staticamente, questo è ridondante ma innocuo
+        OPENSSL_LIB_DIR = "/home/ubuntu/quantumsafe_openssl/build/lib64"
+        current_ld_path = os.environ.get("LD_LIBRARY_PATH", "")
+        if OPENSSL_LIB_DIR not in current_ld_path:
+            os.environ["LD_LIBRARY_PATH"] = f"{OPENSSL_LIB_DIR}:{current_ld_path}"
+
+        # Percorso del file .so del wrapper C compilato (Deve corrispondere a dove lo hai salvato)
+        LIB_WRAPPER_PATH = "/usr/local/lib/aurora_wrapper.so"
+
+        temp_cert_path = None
+        try:
+            # 1. Scrivi i byte del certificato target su un file temporaneo
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".der") as temp_cert:
+                temp_cert.write(target_cert_bytes)
+                temp_cert_path = temp_cert.name
+            
+            # 2. Istanzia il wrapper importato e chiama la verifica
+            verifier = PQVerifier(LIB_WRAPPER_PATH)
+            
+            logger.info("Avvio verifica Trust PQ tramite PQVerifier...")
+            is_valid = verifier.verify_certificate(temp_cert_path, CA_CERT_PATH)
+
+            if is_valid:
+                 logger.info("Verifica Trust PQ: SUCCESS. Il certificato è firmato correttamente.")
+            else:
+                 logger.error("Verifica Trust PQ Fallita: FAILURE.")
+                 
+            return is_valid
+
+        except Exception as e:
+            logger.error("ERRORE CRITICO nel processo di verifica PQ (Wrapper): %s", e)
+            return False
+        finally:
+            # 3. Pulizia file temporaneo
+            if temp_cert_path and os.path.exists(temp_cert_path):
+                try:
+                    os.remove(temp_cert_path)
+                except OSError:
+                    pass
+
 
     def update(self, data):    
         # Bind key-value pairs ('data') to those fields which are meant to be externally changeable
         self.cast_changes(
             data,
-            ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "iak_tpm", "iak_cert", "idevid_tpm", "idevid_cert", "ip", "pq_key", "pq_algorithm", "pq_cert"]
+            ["agent_id", "ek_tpm", "ekcert", "aik_tpm", "iak_tpm", "iak_cert", "idevid_tpm", "idevid_cert", "ip", "pq_key", "pq_algorithm"]
             + ["port", "mtls_cert"],
         )
 
@@ -323,7 +403,7 @@ class RegistrarAgent(PersistableModel):
         # Increment number of registrations if appropriate
         self._prepare_regcount()
         
-        pq_cert = self.changes.get("pq_cert")
+        # pq_cert rimosso dallo schema, usiamo solo data.get("pq_cert") se inviato.
         pq_key_list = data.get("pq_key") # Chiave pubblica inviata direttamente dall'Agent nel payload
 
         # Variabili per il confronto
@@ -344,6 +424,7 @@ class RegistrarAgent(PersistableModel):
                 self._add_error("pq_key", "Invalid key format provided in 'pq_key' field.")
                 # Non usciamo, ma continuiamo con il certificato per non bloccare la registrazione
 
+
         # --- 2. ESTRAZIONE CHIAVE DA CERTIFICATO STATICO (TEST DI CONFRONTO) ---
 
         # Percorso del file del certificato per il test (FORZATO)
@@ -351,6 +432,8 @@ class RegistrarAgent(PersistableModel):
         # Dimensione attesa della chiave pubblica MLDSA-87 (2592 byte, basato sull'output l=2593)
         EXPECTED_PQ_KEY_SIZE = 2592 
         
+        cert_validation_failed = False # Flag critico per bloccare il fallback se la verifica fallisce
+
         logger.info("--- Inizio Parsing Certificato PQ (Test Statico per Confronto) ---")
         try:
             # 1. Carica i dati binari del certificato (DER)
@@ -359,42 +442,62 @@ class RegistrarAgent(PersistableModel):
             # MONITORAGGIO: Dati caricati
             logger.info("Passo 1: Certificato caricato. Dimensione: %d bytes.", len(cert_data))
 
-            # 2. Carica il certificato utilizzando asn1crypto per una decodifica robusta
-            cert_asn1 = asn1_x509.Certificate.load(cert_data)
-            
-            # MONITORAGGIO: Struttura parsata
-            logger.info("Passo 2: Parsing ASN.1 riuscito.")
+            # --- NUOVO STEP: VERIFICA DELLA CA (USA MODULO ESTERNO) ---
+            if not self._verify_pq_cert_trust_status(cert_data):
+                logger.error("VERIFICA CA FALLITA: Il certificato PQ non è emesso da una CA fidata.")
+                # E aggiungiamo l'errore al modello per garantire il ritorno 400
+                self._add_error("pq_cert", "PQ Certificate Trust verification failed against CA.")
+                cert_validation_failed = True
+            else:
+                # 2. Carica il certificato utilizzando asn1crypto per una decodifica robusta
+                cert_asn1 = asn1_x509.Certificate.load(cert_data)
+                
+                # 3. Accedi alla struttura SubjectPublicKeyInfo (SPKI)
+                tbs_certificate = cert_asn1['tbs_certificate']
+                spki_container = tbs_certificate[6] # Indice 6 (SPKI) confermato come funzionante
+                
+                # Estrazione e re-parsing ASN.1 (logica che ha funzionato)
+                spki_raw_bytes = spki_container.dump()
+                spki_sequence = Sequence.load(spki_raw_bytes)
+                public_key_bit_string = spki_sequence[1] 
+                
+                # Otteniamo i byte della chiave escludendo il byte di padding (il primo byte).
+                # .contents è l'attributo che contiene i dati binari per le stringhe ASN.1 grezze.
+                raw_pq_key_bytes_with_padding = public_key_bit_string.contents
+                raw_pq_key_bytes = raw_pq_key_bytes_with_padding[1:]
+                
+                # Verifica della dimensione attesa
+                if len(raw_pq_key_bytes) != EXPECTED_PQ_KEY_SIZE:
+                     logger.error("ERRORE: Dimensione chiave estratta dal certificato non corrispondente. Trovati %d B, attesi %d B.", len(raw_pq_key_bytes), EXPECTED_PQ_KEY_SIZE)
+                     raise ValueError(f"Dimensione chiave pubblica non corretta ({len(raw_pq_key_bytes)} B), attesi {EXPECTED_PQ_KEY_SIZE} B.")
+                
+                # 5. Codifica in Base64 per l'archiviazione
+                pq_key_from_cert_b64 = base64.b64encode(raw_pq_key_bytes).decode("ascii")
 
-            # 3. Accedi direttamente alla struttura SubjectPublicKeyInfo (SPKI) bypassando la mappatura OID
-            tbs_certificate = cert_asn1['tbs_certificate']
-            spki_container = tbs_certificate[6] # Indice 6 (SPKI) confermato come funzionante
-            spki_raw_bytes = spki_container.dump()
-            spki_sequence = Sequence.load(spki_raw_bytes)
-            public_key_bit_string = spki_sequence[1] 
-            
-            # Usa .contents per l'estrazione dei byte grezzi (che ha funzionato)
-            raw_pq_key_bytes_with_padding = public_key_bit_string.contents
-            pq_key_from_cert_bytes = raw_pq_key_bytes_with_padding[1:] # Rimuove byte di padding
-            pq_key_from_cert_b64 = base64.b64encode(pq_key_from_cert_bytes).decode("ascii")
-
-            logger.info("Chiave PQ estratta da certificato statico con successo.")
-            
-            # Verifica dimensione (OPZIONALE, ma buona pratica)
-            if len(pq_key_from_cert_bytes) != EXPECTED_PQ_KEY_SIZE:
-                logger.error("ERRORE: Dimensione chiave estratta dal certificato non corrispondente. Trovati %d B, attesi %d B.", len(pq_key_from_cert_bytes), EXPECTED_PQ_KEY_SIZE)
-                # NON impostiamo l'errore self._add_error per la chiave del certificato statico
-                pq_key_from_cert_b64 = None # Invalida la chiave estratta per il confronto
-
+                logger.info("Chiave PQ estratta da certificato statico con successo.")
+                
         except FileNotFoundError:
             logger.error("FATAL: File certificato statico non trovato a %s. Impossibile eseguire il confronto.", CERT_PATH)
+            cert_validation_failed = True
         except Exception as e:
-            logger.error("ERRORE CRITICO: Fallimento parsing ASN.1 certificato PQ statico: %s", e)
+            # Cattura eccezioni di parsing (es. ValueError o ASN.1 error)
+            logger.error("ERRORE CRITICO: Fallimento parsing/verifica certificato PQ statico: %s", e)
+            cert_validation_failed = True
+            # FIX: Controllo corretto degli errori (uso di self._errors)
+            if not self._errors:
+                 self._add_error("pq_cert", f"PQ Certificate processing failed: {e}")
         finally:
             logger.info("--- Fine Parsing Certificato PQ ---")
 
 
         # --- 3. CONFRONTO E SALVATAGGIO ---
 
+        # Controllo errori di validazione nativi (es. formati base64 sbagliati, ecc.)
+        # Correzione: Accesso diretto al dizionario interno degli errori del modello
+        # Se self._errors non è vuoto, ci sono stati errori
+        has_validation_errors = bool(self._errors)
+
+        # Se il parsing ASN.1 è fallito, pq_key_from_cert_b64 è None.
         if pq_key_from_cert_b64 and pq_key_from_payload_b64:
             # Confronta i byte (o la stringa Base64)
             if pq_key_from_cert_b64 == pq_key_from_payload_b64:
@@ -410,17 +513,27 @@ class RegistrarAgent(PersistableModel):
                 self.pq_key = None # Impedisce la registrazione di una chiave ambigua
         
         elif pq_key_from_cert_b64:
-            # Caso: Solo certificato valido disponibile (produzione raccomandata)
-            logger.warning("ATTENZIONE: Payload diretto della chiave PQ mancante. Si salva la chiave estratta dal certificato (verificata da CA).")
-            self.pq_key = pq_key_from_cert_b64
-            self.pq_algorithm = data.get("pq_algorithm")
+            # Caso: Solo chiave certificata disponibile
+            # Controlla se la verifica CA è andata bene
+            if not cert_validation_failed and not has_validation_errors:
+                logger.warning("ATTENZIONE: Payload diretto della chiave PQ mancante. Si salva la chiave estratta dal certificato (verificata da CA).")
+                self.pq_key = pq_key_from_cert_b64
+                self.pq_algorithm = data.get("pq_algorithm")
+            else:
+                logger.error("Chiave estratta dal certificato ignorata: verifica CA fallita.")
+                self.pq_key = None
         
         elif pq_key_from_payload_b64:
-            # Caso: Solo chiave payload disponibile (scenario non-PKI o fallback)
-            # Questo è il caso che è successo nel tuo test precedente.
-            logger.warning("ATTENZIONE: Certificato PQ mancante o non parsabile. Si salva la chiave dal payload diretto (non certificata).")
-            self.pq_key = pq_key_from_payload_b64
-            self.pq_algorithm = data.get("pq_algorithm")
+            # Caso: Solo chiave payload disponibile
+            # Blocca il fallback se la validazione del certificato è fallita esplicitamente
+            if cert_validation_failed or has_validation_errors:
+                 logger.critical("INTERRUZIONE REGISTRAZIONE: La validazione del certificato PQ (statico) è fallita. Impedisco il fallback alla chiave non certificata.")
+                 self.pq_key = None 
+            else:
+                 # Fallback consentito SOLO se non c'è stato un tentativo fallito di validazione certificato (es. nessun certificato fornito)
+                 logger.warning("ATTENZIONE: Certificato PQ mancante (nessun tentativo di validazione). Si salva la chiave dal payload diretto (non certificata).")
+                 self.pq_key = pq_key_from_payload_b64
+                 self.pq_algorithm = data.get("pq_algorithm")
         else:
             # Nessuna chiave PQ valida trovata, lascia pq_key = None
             logger.warning("Nessuna chiave PQ valida è stata fornita né nel payload diretto né nel certificato.")
