@@ -16,7 +16,7 @@ from pyasn1_modules import pem as pyasn1_pem
 from pyasn1_modules import rfc2459 as pyasn1_rfc2459
 from sqlalchemy.types import Text
 
-# Import per parsing ASN.1 manuale PQ
+# Import for manual parsing ASN.1 manual PQ
 import asn1crypto.x509 as asn1_x509
 from asn1crypto.core import Sequence
 
@@ -24,8 +24,8 @@ from keylime.models.base.type import ModelType
 
 logger = logging.getLogger(__name__)
 
-# --- COSTANTI DI CONFIGURAZIONE PQ ---
-# Assicurati che questo path sia corretto nel tuo sistema
+# --- PQ CONFIGURATION CONSTANTS ---
+# Make sure this path is correct on your system
 LIB_WRAPPER_PATH = "/usr/local/lib/aurora_wrapper.so"
 AURORA_PROVIDER_DIR = "/home/ubuntu/quantumsafe_openssl/build/lib64"
 EXPECTED_PQ_KEY_SIZE = 2592 
@@ -126,16 +126,13 @@ class Certificate(ModelType):
     def native_type(self) -> type:
         return cryptography.x509.Certificate
 
-
-# --- CLASSI PQ (Helper e ModelType) ---
-
 class PQVerifier:
-    """Wrapper interno per la libreria C di verifica firme PQ (Aurora)."""
+    """Internal wrapper for the PQ signature verification C library (Aurora)."""
     def __init__(self, lib_path):
         if not os.path.exists(lib_path):
-            raise FileNotFoundError(f"Libreria C non trovata: {lib_path}")
+            raise FileNotFoundError(f"C library not found: {lib_path}")
         try:
-            # Configurazione Ambiente
+            # Environment Configuration
             if "OPENSSL_MODULES" not in os.environ:
                 os.environ["OPENSSL_MODULES"] = AURORA_PROVIDER_DIR
             
@@ -153,7 +150,7 @@ class PQVerifier:
             self.lib.verify_certificate_file.restype = ctypes.c_int
             
         except OSError as e:
-            logger.error("Impossibile caricare la libreria PQ Wrapper: %s", e)
+            logger.error("Unable to load PQ Wrapper library: %s", e)
             raise
 
     def verify(self, target_cert_bytes: bytes, ca_path: str) -> bool:
@@ -185,10 +182,10 @@ class PQVerifier:
                     pass
 
 class PQX509Certificate:
-    """Rappresentazione Python di un certificato PQ X.509."""
+    """Python representation of a PQ X.509 certificate."""
     def __init__(self, der_data: bytes):
         self._der_data = der_data
-        # Valida ASN.1 generica
+        # Generic ASN.1 validation
         try:
             self._asn1_obj = asn1_x509.Certificate.load(der_data)
         except Exception as e:
@@ -208,12 +205,12 @@ class PQX509Certificate:
     def extract_public_key(self) -> str:
         try:
             tbs = self._asn1_obj['tbs_certificate']
-            # Accesso per indice fisso (6) alla SPKI e re-parsing
+            # Access by fixed index (6) to SPKI and re-parsing
             spki_container = tbs[6]
             spki_raw = spki_container.dump()
             spki_seq = Sequence.load(spki_raw)
             
-            # Estrazione BitString (indice 1) e contenuto raw (saltando padding byte)
+            # Extraction BitString (index 1) and raw content (skipping padding byte)
             raw_bytes = spki_seq[1].contents[1:]
             
             if len(raw_bytes) != EXPECTED_PQ_KEY_SIZE:
@@ -226,11 +223,11 @@ class PQX509Certificate:
 
 
 class PQCertificate(ModelType):
-    """Tipo modello Keylime per certificati Post-Quantum.
-    Salva su DB come stringa Base64 del DER.
+    """Keylime model type for Post-Quantum certificates.
+    Saves to DB as Base64 string of DER.
     """
     
-    # Aggiunto 'list' ai tipi supportati
+    # Added 'list' to supported types
     IncomingValue: TypeAlias = Union[PQX509Certificate, bytes, str, list, None]
 
     def __init__(self) -> None:
@@ -257,10 +254,10 @@ class PQCertificate(ModelType):
             try:
                 der_data = base64.b64decode(value, validate=True)
             except (binascii.Error, ValueError):
-                 # Se fallisce base64, potrebbe essere una stringa PEM o garbage.
-                 # Proviamo a vedere se è PEM, altrimenti errore.
+                 # If base64 decoding fails, it might be a PEM string or garbage.
+                 # Let's check if it's PEM, otherwise raise an error.
                  if "BEGIN CERTIFICATE" in value:
-                      # TODO: gestire PEM PQ se necessario (richiede conversione custom)
+                      # TODO: handle PEM PQ if necessary (requires custom conversion)
                       raise ValueError("PQCertificate PEM input not yet supported, use DER bytes/base64")
                  raise ValueError("PQCertificate input string must be Base64 encoded DER")
         

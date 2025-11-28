@@ -6,7 +6,6 @@ import cryptography.x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa, dsa
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-# Aggiunto l'import per Path, necessario per la lettura del file
 from pathlib import Path 
 import base64
 from keylime import cert_utils, config, crypto, keylime_logging
@@ -25,15 +24,12 @@ from keylime.models.base.types.certificate import PQCertificate
 from keylime.tpm import tpm2_objects
 from keylime.tpm.tpm_main import Tpm
 
-# Aggiungi un import per la gestione ASN.1 grezza
 import asn1crypto.x509 as asn1_x509 
 from asn1crypto.core import OctetString
 from asn1crypto.core import Sequence
-from asn1crypto.core import BitString # Import necessario per l'estrazione finale
+from asn1crypto.core import BitString # Import necessary for final extraction
 
-# NUOVO IMPORT OQS PER GESTIRE LA CRITTOGRAFIA PQ
-import oqs # Assumiamo che liboqs-python sia installato
-# NUOVO IMPORT CTYPES
+import oqs
 import ctypes
 import os
 import tempfile
@@ -76,7 +72,7 @@ class RegistrarAgent(PersistableModel):
         # The PQ algorithm used for the quote wrapping
         cls._field("pq_algorithm", String(50), nullable=True)
         
-        # CAMPO PQ_CERT CONFIGURATO CORRETTAMENTE CON LA NUOVA CLASSE
+        # PQ Cert field
         cls._field("pq_cert", PQCertificate, nullable=True) 
 
         # The number of times the agent has registered over its lifetime
@@ -305,64 +301,52 @@ class RegistrarAgent(PersistableModel):
         if not isinstance(pq_key, str):
             raise ValueError("pq_key must be a str")
         try:
-        # Prova a decodificare Base64 per verificare il formato
             decoded_key = base64.b64decode(pq_key)
         except Exception:
             raise ValueError("Invalid pq_key: not a valid Base64 string")
 
     def _verify_pq_cert_trust_status(self, target_cert_bytes: bytes) -> bool:
-        """
-        Verifica la catena di fiducia del certificato PQ (che non ha ancora un oggetto Certificate)
-        con il certificato CA statico chiamando un wrapper C di OpenSSL (Aurora).
-        """
         CA_CERT_PATH = "/home/ubuntu/trust-manager/agents-pki/qubip-tls-ca-cert.pem"
         LIB_WRAPPER_PATH = "/usr/local/lib/aurora_wrapper.so"
-        
-        # --- CONFIGURAZIONE AMBIENTE CRITICA (CUSTOM OPENSSL) ---
-        # Questo path deve puntare alla cartella build/lib64 della tua installazione custom
-        # È comunque utile settarlo qui per il contesto del processo corrente se il wrapper non lo fa
         AURORA_PROVIDER_DIR = "/home/ubuntu/quantumsafe_openssl/build/lib64"
         
         if not os.path.exists(CA_CERT_PATH):
-            logger.error("FATAL: Certificato CA non trovato a %s.", CA_CERT_PATH)
+            logger.error("FATAL: CA Certificate not found at %s.", CA_CERT_PATH)
             return False
 
-        # Impostazione di sicurezza per l'ambiente
         if "OPENSSL_MODULES" not in os.environ:
-            logger.info("Forzatura OPENSSL_MODULES a: %s", AURORA_PROVIDER_DIR)
+            logger.info("Forcing OPENSSL_MODULES to: %s", AURORA_PROVIDER_DIR)
             os.environ["OPENSSL_MODULES"] = AURORA_PROVIDER_DIR
         
-        # Imposta LD_LIBRARY_PATH per sicurezza (anche se wrapper è statico)
+        # Set LD_LIBRARY_PATH for safety (even if wrapper is static)
         current_ld_path = os.environ.get("LD_LIBRARY_PATH", "")
         if AURORA_PROVIDER_DIR not in current_ld_path:
             os.environ["LD_LIBRARY_PATH"] = f"{AURORA_PROVIDER_DIR}:{current_ld_path}"
 
         temp_cert_path = None
         try:
-            # Scrivi i byte del certificato target su un file temporaneo
             with tempfile.NamedTemporaryFile(delete=False, suffix=".der") as temp_cert:
                 temp_cert.write(target_cert_bytes)
                 temp_cert_path = temp_cert.name
             
-            # Istanzia il wrapper importato e chiama la verifica
-            # Nota: Se LIB_WRAPPER_PATH non esiste, PQVerifier solleverà FileNotFoundError
+            # Instantiate the imported wrapper and call the verification
+            # Note: If LIB_WRAPPER_PATH does not exist, PQVerifier will raise FileNotFoundError
             verifier = PQVerifier(LIB_WRAPPER_PATH)
             
-            logger.info("Avvio verifica Trust PQ tramite PQVerifier...")
+            logger.info("Starting PQ Trust verification via PQVerifier...")
             is_valid = verifier.verify_certificate(temp_cert_path, CA_CERT_PATH)
 
             if is_valid:
-                 logger.info("Verifica Trust PQ: SUCCESS. Il certificato è firmato correttamente.")
+                 logger.info("PQ Certificate verification: SUCCESS. The certificate is correctly signed.")
             else:
-                 logger.error("Verifica Trust PQ Fallita: FAILURE.")
+                 logger.error("PQ Certificate verification: FAILURE.")
                  
             return is_valid
 
         except Exception as e:
-            logger.error("ERRORE CRITICO nel processo di verifica PQ (Wrapper): %s", e)
+            logger.error("CRITICAL ERROR in PQ verification process (Wrapper): %s", e)
             return False
         finally:
-            # 3. Pulizia file temporaneo
             if temp_cert_path and os.path.exists(temp_cert_path):
                 try:
                     os.remove(temp_cert_path)
@@ -388,70 +372,24 @@ class RegistrarAgent(PersistableModel):
 
         self._prepare_status_flags()
         self._prepare_regcount()
-        
-        # --- LOGICA PQ GESTITA TRAMITE OGGETTO PQCertificate ---
-        
-        # Recupera l'oggetto PQCertificate (già castato da cast_changes)
         pq_cert_obj = self.changes.get("pq_cert")
-        pq_key_list = data.get("pq_key")
 
-        pq_key_from_cert_b64 = None
-        pq_key_from_payload_b64 = None
-        
-        # 1. Chiave da Payload
-        if pq_key_list:
-            try:
-                pq_key_from_payload_bytes = bytes(pq_key_list)
-                pq_key_from_payload_b64 = base64.b64encode(pq_key_from_payload_bytes).decode("ascii")
-                logger.info("Chiave PQ da Payload (diretta) decodificata.")
-            except Exception:
-                self._add_error("pq_key", "Invalid key format in payload")
-
-        # 2. Verifica ed Estrazione da Certificato
         if pq_cert_obj:
-            logger.info("Processamento Certificato PQ dinamico...")
+            logger.info("PQ certificate received. Algorithm: {}...".format(data.get("pq_algorithm")))
             CA_PATH = "/home/ubuntu/trust-manager/agents-pki/qubip-tls-ca-cert.pem" # Da config in futuro
             
-            # A. Verifica Trust (Delega alla classe PQCertificate)
             if pq_cert_obj.verify_trust(CA_PATH):
-                logger.info("Verifica Trust PQ: SUCCESS.")
+                logger.info("PQ Certificate verification: SUCCESS.")
                 # B. Estrazione Chiave (Delega alla classe PQCertificate)
                 try:
                     pq_key_from_cert_b64 = pq_cert_obj.extract_public_key()
-                    logger.info("Estrazione Chiave PQ: SUCCESS.")
+                    logger.info("PQ Key extraction: SUCCESS.")
                 except ValueError as e:
-                    logger.error("Estrazione Chiave PQ Fallita: %s", e)
+                    logger.error("PQ Key extraction: FAILURE: %s", e)
                     self._add_error("pq_cert", f"Key extraction failed: {e}")
             else:
-                logger.error("Verifica Trust PQ: FAILURE (CA check failed).")
+                logger.error("PQ Certificate verification: FAILURE (CA check failed).")
                 self._add_error("pq_cert", "PQ Certificate Trust verification failed against CA.")
-
-        # 3. Confronto e Assegnazione
-        if pq_key_from_cert_b64 and pq_key_from_payload_b64:
-            if pq_key_from_cert_b64 == pq_key_from_payload_b64:
-                logger.info("MATCH: Chiave Certificato == Chiave Payload.")
-                self.pq_key = pq_key_from_cert_b64
-                self.pq_algorithm = data.get("pq_algorithm")
-            else:
-                logger.critical("MISMATCH: Le chiavi non corrispondono!")
-                self._add_error("pq_key", "Key mismatch between certificate and payload")
-                self.pq_key = None
-        
-        elif pq_key_from_cert_b64:
-            if not self.has_errors("pq_cert"): # Usa helper interno se disponibile o controlla self._errors
-                logger.warning("Uso chiave da certificato (payload mancante).")
-                self.pq_key = pq_key_from_cert_b64
-                self.pq_algorithm = data.get("pq_algorithm")
-
-        elif pq_key_from_payload_b64:
-             # Blocca fallback se la verifica certificato è fallita esplicitamente (campo pq_cert presente ma con errori)
-             if self.changes.get("pq_cert") and (self.has_errors("pq_cert") if hasattr(self, 'has_errors') else bool(self._errors.get("pq_cert"))):
-                  logger.critical("INTERRUZIONE: Certificato PQ non valido. Blocco fallback.")
-                  self.pq_key = None
-             else:
-                  logger.warning("Uso chiave da payload (certificato mancante).")
-                  self.pq_key = pq_key_from_payload_b64
-                  self.pq_algorithm = data.get("pq_algorithm")
        
     def produce_ak_challenge(self):
         if not self.ek_tpm or not self.aik_tpm:
