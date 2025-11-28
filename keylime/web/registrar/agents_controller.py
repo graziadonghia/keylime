@@ -64,6 +64,7 @@ class AgentsController(Controller):
         accepted = agent.verify_ak_response(auth_tag)
         pq_key = agent.pq_key
         pq_algorithm = agent.pq_algorithm
+        pq_cert = agent.pq_cert
         logger.info(f"Using PQ algorithm: {pq_algorithm}")
         #logger.info(f"pq_key = '{pq_key}'")
         pq_key_bytes = base64.b64decode(pq_key)

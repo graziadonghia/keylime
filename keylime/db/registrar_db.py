@@ -31,3 +31,4 @@ class RegistrarMain(Base):
     regcount = Column(Integer)
     pq_key = Column(String(4000))
     pq_algorithm = Column(String(100))
+    pq_cert = Column(String(50000))

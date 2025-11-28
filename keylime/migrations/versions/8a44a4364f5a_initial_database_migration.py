@@ -45,6 +45,7 @@ def upgrade_registrar():
         sa.Column("regcount", sa.Integer(), nullable=True),
         sa.Column("pq_key", sa.String(length=500), nullable=True),
         sa.Column("pq_algorithm", sa.String(length=100), nullable=True),
+        sa.Column("pq_cert", sa.String(length=50000), nullable=True),
         sa.PrimaryKeyConstraint("agent_id"),
     )
     # ### end Alembic commands ###

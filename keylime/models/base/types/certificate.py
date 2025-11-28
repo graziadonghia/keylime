@@ -1,7 +1,11 @@
 import base64
 import binascii
 import io
-from typing import Optional, TypeAlias, Union
+import os
+import ctypes
+import tempfile
+import logging
+from typing import Optional, TypeAlias, Union, Any, List
 
 import cryptography.x509
 from cryptography.hazmat.primitives.serialization import Encoding
@@ -12,71 +16,22 @@ from pyasn1_modules import pem as pyasn1_pem
 from pyasn1_modules import rfc2459 as pyasn1_rfc2459
 from sqlalchemy.types import Text
 
+# Import per parsing ASN.1 manuale PQ
+import asn1crypto.x509 as asn1_x509
+from asn1crypto.core import Sequence
+
 from keylime.models.base.type import ModelType
 
+logger = logging.getLogger(__name__)
+
+# --- COSTANTI DI CONFIGURAZIONE PQ ---
+# Assicurati che questo path sia corretto nel tuo sistema
+LIB_WRAPPER_PATH = "/usr/local/lib/aurora_wrapper.so"
+AURORA_PROVIDER_DIR = "/home/ubuntu/quantumsafe_openssl/build/lib64"
+EXPECTED_PQ_KEY_SIZE = 2592 
 
 class Certificate(ModelType):
-    """The Certificate class implements the model type API (by inheriting from ``ModelType``) to allow model fields to
-    be declared as containing objects of type ``cryptography.x509.Certificate``. When such a field is set, the incoming
-    value is decoded as appropriate and cast to an ``cryptography.x509.Certificate`` object. If saved to a database, the
-    object is converted to its DER representation and encoded as a string using Base64.
-
-    The schema of the backing database table is thus assumed to declare the certificate-containing column as type
-    ``"Text"`` or comparable, in line with established Keylime convention.
-
-    Example 1
-    ---------
-
-    To use the Certificate type, declare a model field as in the following example::
-
-        class SomeModel(PersistableModel):
-            def _schema(self):
-                cls._field("cert", Certificate, nullable=True)
-                # (Any additional schema declarations...)
-
-    Then, you can set the field by providing:
-
-    * a previously-instantiated ``cryptography.x509.Certificate`` object;
-    * a ``bytes`` object containing DER-encoded binary certificate data; or
-    * a ``str`` object containing DER binary certificate data which has been Base64 encoded; or
-    * a ``str`` object containing PEM-encoded certificate data.
-
-    This is shown in the code sample below::
-
-        record = SomeModel.empty()
-
-        # Set cert field using ``certificate`` which is of type ``cryptography.x509.Certificate``:
-        record.cert = certificate
-
-        # Set cert field using DER binary data:
-        record.cert = b'0\x82\x04...'
-
-        # Set cert field using Base64-encoded data:
-        record.cert = "MIIE..."
-
-        # Set cert field using PEM-encoded data:
-        record.cert = "-----BEGIN CERTIFICATE-----\nMIIE..."
-
-    On performing ``record.commit_changes()``, the certificate will be saved to the database using the Base64
-    representation (without the PEM header and footer), i.e., ``"MIIE..."``.
-
-    Example 2
-    ---------
-
-    You may also use the Certificate type's casting functionality outside a model by using the ``cast`` method directly::
-
-        # If ``certificate`` is of type ``cryptography.x509.Certificate``, casting it returns it unchanged:
-        cert = Certificate().cast(certificate)
-
-        # Converts DER binary certificate data to ``cryptography.x509.Certificate``:
-        cert = Certificate().cast(b'0\x82\x04...')
-
-        # Converts Base64-encoded certificate data to ``cryptography.x509.Certificate``:
-        cert = Certificate().cast("MIIE...")
-
-        # Converts PEM-encoded certificate data to ``cryptography.x509.Certificate``:
-        cert = Certificate().cast("-----BEGIN CERTIFICATE-----\nMIIE...")
-    """
+    """The Certificate class implements the model type API... (omitted)"""
 
     IncomingValue: TypeAlias = Union[cryptography.x509.Certificate, bytes, str, None]
 
@@ -84,31 +39,6 @@ class Certificate(ModelType):
         super().__init__(Text)
 
     def _load_der_cert(self, der_cert_data: bytes) -> cryptography.x509.Certificate:
-        """Loads a binary x509 certificate encoded using ASN.1 DER as a ``cryptography.x509.Certificate`` object. This
-        method does not require strict adherence to ASN.1 DER thereby making it possible to accept certificates which do
-        not follow every detail of the spec (this is the case for a number of TPM certs) [1,2].
-
-        It achieves this by first using the strict parser provided by python-cryptography. If that fails, it decodes the
-        certificate and re-encodes it using the more-forgiving pyasn1 library. The re-encoded certificate is then
-        re-parsed by python-cryptography.
-
-        This method is equivalent to the ``cert_utils.x509_der_cert`` function but does not produce a warning when the
-        backup parser is used, allowing this condition to be optionally detected and handled by the model where
-        relevant. This is part of the fix for issue 1559 [3].
-
-        Note: This method is marked as protected as ``self.cast(...)`` should be called from outside the class instead.
-
-        [1] https://github.com/keylime/keylime/issues/944
-        [2] https://github.com/pyca/cryptography/issues/7189
-        [3] https://github.com/keylime/keylime/issues/1559
-
-        :param der_cert_data: the DER bytes of the certificate
-
-        :raises: :class:`SubstrateUnderrunError`: cert could not be deserialized even using the fallback pyasn1 parser
-
-        :returns: A ``cryptography.x509.Certificate`` object
-        """
-
         try:
             return cryptography.x509.load_der_x509_certificate(der_cert_data)
         except Exception:
@@ -116,32 +46,6 @@ class Certificate(ModelType):
             return cryptography.x509.load_der_x509_certificate(pyasn1_encoder.encode(pyasn1_cert))
 
     def _load_pem_cert(self, pem_cert_data: str) -> cryptography.x509.Certificate:
-        """Loads a text x509 certificate encoded using PEM (Base64ed DER with header and footer) as a
-        ``cryptography.x509.Certificate`` object. This method does not require strict adherence to ASN.1 DER thereby
-        making it possible to accept certificates which do not follow every detail of the spec (this is the case for
-        a number of TPM certs) [1,2].
-
-        It achieves this by first using the strict parser provided by python-cryptography. If that fails, it decodes the
-        certificate and re-encodes it using the more-forgiving pyasn1 library. The re-encoded certificate is then
-        re-parsed by python-cryptography.
-
-        This method is equivalent to the ``cert_utils.x509_der_cert`` function but does not produce a warning when the
-        backup parser is used, allowing this condition to be optionally detected and handled by the model where
-        relevant. This is part of the fix for issue 1559 [3].
-
-        Note: This method is marked as protected as ``self.cast(...)`` should be called from outside the class instead.
-
-        [1] https://github.com/keylime/keylime/issues/944
-        [2] https://github.com/pyca/cryptography/issues/7189
-        [3] https://github.com/keylime/keylime/issues/1559
-
-        :param der_cert_data: the DER bytes of the certificate
-
-        :raises: :class:`SubstrateUnderrunError`: cert could not be deserialized even using the fallback pyasn1 parser
-
-        :returns: A ``cryptography.x509.Certificate`` object
-        """
-
         try:
             return cryptography.x509.load_pem_x509_certificate(pem_cert_data.encode("utf-8"))
         except Exception:
@@ -150,20 +54,6 @@ class Certificate(ModelType):
             return cryptography.x509.load_der_x509_certificate(pyasn1_encoder.encode(pyasn1_cert))
 
     def infer_encoding(self, value: IncomingValue) -> Optional[str]:
-        """Tries to infer the certificate encoding from the given value based on the data type and other surface-level
-        checks. Whatever the encoding inferred, it is not guaranteed that the value is a valid certificate which will
-        be successfully deserialized.
-
-        :param value: The value in DER, Base64(DER), or PEM format (or an already deserialized certificate object)
-
-        :returns: ``"der"`` when the value appears to be DER encoded
-        :returns: ``"pem"`` when the value appears to be PEM encoded
-        :returns: ``"base64"`` when the value appears to be Base64(DER) encoded (without PEM headers)
-        :returns: ``"decoded"`` when the value is already a ``cryptography.x509.Certificate`` object
-        :returns: ``None`` when the encoding cannot be inferred
-        """
-        # pylint: disable=no-else-return
-
         if isinstance(value, cryptography.x509.Certificate):
             return "decoded"
         elif isinstance(value, bytes):
@@ -176,24 +66,6 @@ class Certificate(ModelType):
             return None
 
     def asn1_compliant(self, value: IncomingValue) -> Optional[bool]:
-        """Checks whether a value can be deserialized by python-cryptography. As the library enforces strict
-        adherence to the ASN.1 Distinguished Encoding Rules (DER), this method returns ``False`` whenever an
-        incoming value is not a valid certificate which conforms to ASN.1 DER.
-
-        Note: ``self.cast(...)`` and related methods in this class will not necessarily fail if this method returns
-        ``False``. They will first attempt to re-encode the certificate using a more forgiving ASN.1 library, as there
-        are many certificates "in the wild" which are not strictly compliant [1, 2].
-
-        [1] https://github.com/keylime/keylime/issues/944
-        [2] https://github.com/pyca/cryptography/issues/7189
-
-        :param value: The value in DER, Base64(DER), or PEM format (or an already deserialized certificate object)
-
-        :returns: ``"True"`` if the value can be deserialized by python-cryptography and is ASN.1 DER compliant
-        :returns: ``"False"`` if the value cannot be deserialized by python-cryptography
-        :returns: ``None`` if the value is already a deserialized certificate of type ``cryptography.x509.Certificate``
-        """
-
         try:
             match self.infer_encoding(value):
                 case "decoded":
@@ -209,24 +81,11 @@ class Certificate(ModelType):
                     raise Exception
         except Exception:
             return False
-
         return True
 
     def cast(self, value: IncomingValue) -> Optional[cryptography.x509.Certificate]:
-        """Tries to interpret the given value as an X.509 certificate and convert it to a
-        ``cryptography.x509.Certificate`` object. Values which do not require conversion are returned unchanged.
-
-        :param value: The value to convert (may be in DER, Base64(DER), or PEM format)
-
-        :raises: :class:`TypeError`: ``value`` is of an unexpected data type
-        :raises: :class:`ValueError`: ``value`` does not contain data which is interpretable as a certificate
-
-        :returns: A ``cryptography.x509.Certificate`` object or None if an empty value is given
-        """
-
         if not value:
             return None
-
         match self.infer_encoding(value):
             case "decoded":
                 return value  # type: ignore[reportReturnType, return-value]
@@ -234,54 +93,198 @@ class Certificate(ModelType):
                 try:
                     return self._load_der_cert(value)  # type: ignore[reportArgumentType, arg-type]
                 except PyAsn1Error as err:
-                    raise ValueError(
-                        f"value cast to certificate appears DER encoded but cannot be deserialized as such: {value!r}"
-                    ) from err
+                    raise ValueError(f"value cast to certificate appears DER encoded but cannot be deserialized: {value!r}") from err
             case "pem":
                 try:
                     return self._load_pem_cert(value)  # type: ignore[reportArgumentType, arg-type]
                 except PyAsn1Error as err:
-                    raise ValueError(
-                        f"value cast to certificate appears PEM encoded but cannot be deserialized as such: "
-                        f"'{str(value)}'"
-                    ) from err
+                    raise ValueError(f"value cast to certificate appears PEM encoded but cannot be deserialized: '{str(value)}'") from err
             case "base64":
                 try:
                     return self._load_der_cert(base64.b64decode(value, validate=True))  # type: ignore[reportArgumentType, arg-type]
                 except (binascii.Error, PyAsn1Error) as err:
-                    raise ValueError(
-                        f"value cast to certificate appears Base64 encoded but cannot be deserialized as such: "
-                        f"'{str(value)}'"
-                    ) from err
+                    raise ValueError(f"value cast to certificate appears Base64 encoded but cannot be deserialized: '{str(value)}'") from err
             case _:
-                raise TypeError(
-                    f"value cast to certificate is of type '{value.__class__.__name__}' but should be one of 'str', "
-                    f"'bytes' or 'cryptography.x509.Certificate': '{str(value)}'"
-                )
+                raise TypeError(f"value cast to certificate is of type '{value.__class__.__name__}' but should be one of 'str', 'bytes' or 'cryptography.x509.Certificate'")
 
     def generate_error_msg(self, _value: IncomingValue) -> str:
         return "must be a valid X.509 certificate in PEM format or otherwise encoded using Base64"
 
     def _dump(self, value: IncomingValue) -> Optional[str]:
-        # Cast incoming value to Certificate object
         cert = self.cast(value)
-
         if not cert:
             return None
-
-        # Save as Base64-encoded value (without the PEM "BEGIN" and "END" header/footer for efficiency)
         return base64.b64encode(cert.public_bytes(Encoding.DER)).decode("utf-8")
 
     def render(self, value: IncomingValue) -> Optional[str]:
-        # Cast value to Certificate object
         cert = self.cast(value)
-
         if not cert:
             return None
-
-        # Render certificate in PEM format
         return cert.public_bytes(Encoding.PEM).decode("utf-8")  # type: ignore[no-any-return]
 
     @property
     def native_type(self) -> type:
         return cryptography.x509.Certificate
+
+
+# --- CLASSI PQ (Helper e ModelType) ---
+
+class PQVerifier:
+    """Wrapper interno per la libreria C di verifica firme PQ (Aurora)."""
+    def __init__(self, lib_path):
+        if not os.path.exists(lib_path):
+            raise FileNotFoundError(f"Libreria C non trovata: {lib_path}")
+        try:
+            # Configurazione Ambiente
+            if "OPENSSL_MODULES" not in os.environ:
+                os.environ["OPENSSL_MODULES"] = AURORA_PROVIDER_DIR
+            
+            current_ld_path = os.environ.get("LD_LIBRARY_PATH", "")
+            if AURORA_PROVIDER_DIR not in current_ld_path:
+                os.environ["LD_LIBRARY_PATH"] = f"{AURORA_PROVIDER_DIR}:{current_ld_path}"
+
+            # Caricamento Libreria con RTLD_GLOBAL/DEEPBIND
+            dl_flags = ctypes.RTLD_GLOBAL
+            if hasattr(os, 'RTLD_DEEPBIND'):
+                dl_flags |= os.RTLD_DEEPBIND
+            
+            self.lib = ctypes.CDLL(lib_path, mode=dl_flags)
+            self.lib.verify_certificate_file.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            self.lib.verify_certificate_file.restype = ctypes.c_int
+            
+        except OSError as e:
+            logger.error("Impossibile caricare la libreria PQ Wrapper: %s", e)
+            raise
+
+    def verify(self, target_cert_bytes: bytes, ca_path: str) -> bool:
+        if not os.path.exists(ca_path):
+            logger.error("CA Certificate not found at %s", ca_path)
+            return False
+
+        temp_cert_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".der") as temp_cert:
+                temp_cert.write(target_cert_bytes)
+                temp_cert_path = temp_cert.name
+            
+            b_target = temp_cert_path.encode('utf-8')
+            b_ca = ca_path.encode('utf-8')
+            
+            logger.debug("PQVerifier: Calling C verify_certificate_file...")
+            result = self.lib.verify_certificate_file(b_target, b_ca)
+            return result == 1
+
+        except Exception as e:
+            logger.error("Error in PQ C-Wrapper verification: %s", e)
+            return False
+        finally:
+            if temp_cert_path and os.path.exists(temp_cert_path):
+                try:
+                    os.remove(temp_cert_path)
+                except OSError:
+                    pass
+
+class PQX509Certificate:
+    """Rappresentazione Python di un certificato PQ X.509."""
+    def __init__(self, der_data: bytes):
+        self._der_data = der_data
+        # Valida ASN.1 generica
+        try:
+            self._asn1_obj = asn1_x509.Certificate.load(der_data)
+        except Exception as e:
+            raise ValueError(f"Invalid ASN.1 structure for PQ Certificate: {e}")
+
+    def public_bytes(self) -> bytes:
+        return self._der_data
+
+    def verify_trust(self, ca_path: str) -> bool:
+        try:
+            verifier = PQVerifier(LIB_WRAPPER_PATH)
+            return verifier.verify(self._der_data, ca_path)
+        except Exception as e:
+            logger.error("PQ Trust Verification exception: %s", e)
+            return False
+
+    def extract_public_key(self) -> str:
+        try:
+            tbs = self._asn1_obj['tbs_certificate']
+            # Accesso per indice fisso (6) alla SPKI e re-parsing
+            spki_container = tbs[6]
+            spki_raw = spki_container.dump()
+            spki_seq = Sequence.load(spki_raw)
+            
+            # Estrazione BitString (indice 1) e contenuto raw (saltando padding byte)
+            raw_bytes = spki_seq[1].contents[1:]
+            
+            if len(raw_bytes) != EXPECTED_PQ_KEY_SIZE:
+                 raise ValueError(f"Size mismatch: got {len(raw_bytes)}, expected {EXPECTED_PQ_KEY_SIZE}")
+            
+            return base64.b64encode(raw_bytes).decode("ascii")
+        except Exception as e:
+            logger.error("PQ Key Extraction Failed: %s", e)
+            raise ValueError(f"Could not extract PQ public key: {e}")
+
+
+class PQCertificate(ModelType):
+    """Tipo modello Keylime per certificati Post-Quantum.
+    Salva su DB come stringa Base64 del DER.
+    """
+    
+    # Aggiunto 'list' ai tipi supportati
+    IncomingValue: TypeAlias = Union[PQX509Certificate, bytes, str, list, None]
+
+    def __init__(self) -> None:
+        super().__init__(Text)
+
+    def cast(self, value: IncomingValue) -> Optional[PQX509Certificate]:
+        if not value:
+            return None
+        
+        if isinstance(value, PQX509Certificate):
+            return value
+        
+        der_data = None
+        
+        if isinstance(value, bytes):
+             der_data = value
+        elif isinstance(value, list):
+             # Gestione LISTA di interi (dal JSON dell'agent) -> Bytes
+             try:
+                 der_data = bytes(value)
+             except Exception as e:
+                 raise ValueError(f"PQCertificate input list could not be converted to bytes: {e}")
+        elif isinstance(value, str):
+            try:
+                der_data = base64.b64decode(value, validate=True)
+            except (binascii.Error, ValueError):
+                 # Se fallisce base64, potrebbe essere una stringa PEM o garbage.
+                 # Proviamo a vedere se è PEM, altrimenti errore.
+                 if "BEGIN CERTIFICATE" in value:
+                      # TODO: gestire PEM PQ se necessario (richiede conversione custom)
+                      raise ValueError("PQCertificate PEM input not yet supported, use DER bytes/base64")
+                 raise ValueError("PQCertificate input string must be Base64 encoded DER")
+        
+        if der_data:
+            return PQX509Certificate(der_data)
+        
+        raise TypeError(f"Unexpected type for PQCertificate: {type(value)}")
+
+    def generate_error_msg(self, _value: IncomingValue) -> str:
+        return "must be a valid PQ X.509 certificate (bytes list or Base64 encoded)"
+
+    def _dump(self, value: IncomingValue) -> Optional[str]:
+        cert = self.cast(value)
+        if not cert:
+            return None
+        return base64.b64encode(cert.public_bytes()).decode("utf-8")
+
+    def render(self, value: IncomingValue) -> Optional[str]:
+        cert = self.cast(value)
+        if not cert:
+            return None
+        # Restituisce sempre Base64 per coerenza API
+        return base64.b64encode(cert.public_bytes()).decode("utf-8")
+    
+    @property
+    def native_type(self) -> type:
+        return PQX509Certificate

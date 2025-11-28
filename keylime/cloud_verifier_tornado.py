@@ -94,6 +94,7 @@ exclude_db: Dict[str, Any] = {
     "ssl_context": None,
     "pq_key" : "",
     "pq_algorithm" : "",
+    "pq_cert" : "",
 }
 
 
@@ -561,6 +562,7 @@ class AgentsHandler(BaseHandler):
 
                     exclude_db["pq_key"] = json_body["pq_key"]
                     exclude_db["pq_algorithm"] = json_body["pq_algorithm"]
+                    exclude_db["pq_cert"] = json_body["pq_cert"]
 
                     if "verifier_ip" in json_body:
                         agent_data["verifier_ip"] = json_body["verifier_ip"]
@@ -1577,6 +1579,7 @@ async def invoke_get_quote(
             # retrieve pq_key from registrar db
             print(type(exclude_db["pq_key"]))
             pq_algorithm_registrar = exclude_db["pq_algorithm"]
+            pq_cert_registrar = exclude_db["pq_cert"]
             logger.info("PQ algorithm from Registrar DB: %s", pq_algorithm_registrar)
             pq_key_registrar = bytes(exclude_db["pq_key"], encoding='utf-8')
             logger.info("MLDSA-87 key retrieved correctly from Registrar DB\n")

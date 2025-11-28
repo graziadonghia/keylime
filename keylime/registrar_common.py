@@ -151,6 +151,7 @@ class ProtectedHandler(BaseHandler):
                 "regcount": agent.regcount,
                 "pq_key": agent.pq_key,
                 "pq_algorithm": agent.pq_algorithm,
+                "pq_cert": agent.pq_cert,
             }
             #logger.debug("PQ KEY")
             #logger.debug(agent.pq_key)
@@ -310,6 +311,7 @@ class UnprotectedHandler(BaseHandler):
             ek_required = tpm_identity == "ek_cert"
             pq_key = ""
             pq_algorithm = ""
+            pq_cert = ""
 
 
                   
@@ -457,6 +459,7 @@ class UnprotectedHandler(BaseHandler):
            
             pq_key = json_body["pq_key"]
             pq_algorithm = json_body["pq_algorithm"]
+            pq_cert = json_body.get("pq_cert")
             # Add values to database
             d: Dict[str, Any] = {
                 "agent_id": agent_id,
@@ -477,6 +480,7 @@ class UnprotectedHandler(BaseHandler):
                 "regcount": regcount,
                 "pq_key":  pq_key,
                 "pq_algorithm": pq_algorithm,
+                "pq_cert": pq_cert,
             }
 
 

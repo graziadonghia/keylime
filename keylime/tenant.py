@@ -615,6 +615,7 @@ class Tenant:
             "supported_version": self.supported_version,
             "pq_key": self.registrar_data["pq_key"],
             "pq_algorithm": self.registrar_data["pq_algorithm"],
+            "pq_cert": self.registrar_data["pq_cert"],
         }
         json_message = json.dumps(data)
         logger.info("Sending message to verifier:")

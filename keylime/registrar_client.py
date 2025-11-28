@@ -30,6 +30,7 @@ class RegistrarData(TypedDict):
     provider_keys: NotRequired[Dict[str, str]]
     pq_key: str
     pq_algorithm: str
+    pq_cert: str
 
 
 logger = keylime_logging.init_logging("registrar_client")
@@ -103,6 +104,10 @@ def getData(
         if "pq_algorithm" not in response_body["results"]:
             logger.critical("Error: did not receive Post-Quantum algorithm from Registrar Server.")
             return None
+        
+        if "pq_cert" not in response_body["results"]:
+            logger.critical("Error: did not receive Post-Quantum certificate from Registrar Server.")
+            return None
             
     
         r = response_body["results"]
@@ -118,6 +123,7 @@ def getData(
             "ekcert": r.get("ekcert"),
             "pq_key" : r["pq_key"],
             "pq_algorithm" : r["pq_algorithm"],
+            "pq_cert" : r["pq_cert"],
         }
         
         if "provider_keys" in r:
