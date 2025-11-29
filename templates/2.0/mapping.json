@@ -319,7 +319,7 @@
                 "option": "measured_boot_imports",
                 "default": "[]"
             },
-	    "measured_boot_evaluate": {
+            "measured_boot_evaluate": {
                 "section": "cloud_verifier",
                 "option": "measured_boot_evaluate",
                 "default": "once"
@@ -344,47 +344,47 @@
                 "option": "require_allow_list_signatures",
                 "default": "False"
             },
-            "durable_attestation_import" : {
+            "durable_attestation_import": {
                 "section": "cloud_verifier",
                 "option": "durable_attestation_import",
                 "default": ""
             },
-            "persistent_store_url" : {
+            "persistent_store_url": {
                 "section": "cloud_verifier",
                 "option": "persistent_store_url",
                 "default": ""
             },
-            "transparency_log_url" : {
+            "transparency_log_url": {
                 "section": "cloud_verifier",
                 "option": "transparency_log_url",
                 "default": ""
             },
-            "time_stamp_authority_url" : {
+            "time_stamp_authority_url": {
                 "section": "cloud_verifier",
                 "option": "time_stamp_authority_url",
                 "default": ""
             },
-            "time_stamp_authority_certs_path" : {
+            "time_stamp_authority_certs_path": {
                 "section": "cloud_verifier",
                 "option": "time_stamp_authority_certs_path",
                 "default": ""
             },
-            "persistent_store_format" : {
+            "persistent_store_format": {
                 "section": "cloud_verifier",
                 "option": "persistent_store_format",
                 "default": "json"
             },
-            "persistent_store_encoding" : {
+            "persistent_store_encoding": {
                 "section": "cloud_verifier",
                 "option": "persistent_store_encoding",
                 "default": ""
             },
-            "transparency_log_sign_algo" : {
+            "transparency_log_sign_algo": {
                 "section": "cloud_verifier",
                 "option": "transparency_log_sign_algo",
                 "default": "sha256"
             },
-            "signed_attributes" : {
+            "signed_attributes": {
                 "section": "cloud_verifier",
                 "option": "signed_attributes",
                 "default": ""
@@ -575,6 +575,11 @@
                 "option": "trusted_client_ca",
                 "default": "default"
             },
+            "pq_ca_cert": {
+                "section": "registrar",
+                "option": "pq_ca_cert",
+                "default": "default"
+            },
             "database_url": {
                 "section": "registrar",
                 "option": "database_url",
@@ -590,50 +595,50 @@
                 "option": "auto_migrate_db",
                 "default": "True"
             },
-            "durable_attestation_import" : {
+            "durable_attestation_import": {
                 "section": "registrar",
                 "option": "durable_attestation_import",
                 "default": ""
             },
-            "persistent_store_url" : {
+            "persistent_store_url": {
                 "section": "registrar",
                 "option": "persistent_store_url",
                 "default": ""
             },
-            "transparency_log_url" : {
+            "transparency_log_url": {
                 "section": "registrar",
                 "option": "transparency_log_url",
                 "default": ""
             },
-            "time_stamp_authority_url" : {
+            "time_stamp_authority_url": {
                 "section": "registrar",
                 "option": "time_stamp_authority_url",
                 "default": ""
             },
-            "time_stamp_authority_certs_path" : {
+            "time_stamp_authority_certs_path": {
                 "section": "registrar",
                 "option": "time_stamp_authority_certs_path",
                 "default": ""
             },
-            "persistent_store_format" : {
+            "persistent_store_format": {
                 "section": "registrar",
                 "option": "persistent_store_format",
                 "default": "json"
             },
-            "persistent_store_encoding" : {
+            "persistent_store_encoding": {
                 "section": "registrar",
                 "option": "persistent_store_encoding",
                 "default": ""
             },
-            "transparency_log_sign_algo" : {
+            "transparency_log_sign_algo": {
                 "section": "registrar",
                 "option": "transparency_log_sign_algo",
                 "default": "sha256"
             },
-            "signed_attributes" : {
-                 "section": "registrar",
-               	 "option": "signed_attributes",
-            "default": "ek_tpm,aik_tpm,ekcert"
+            "signed_attributes": {
+                "section": "registrar",
+                "option": "signed_attributes",
+                "default": "ek_tpm,aik_tpm,ekcert"
             }
         },
         "ca": {

@@ -15,7 +15,7 @@ def _check_devid_requirements() -> None:
     is not met and DevID is the only identity allowable by the config.
     """
     tpm_identity = config.get("registrar", "tpm_identity", fallback="default")
-
+    pq_ca_cert = config.get("registrar", "pq_ca_cert")
     if int(cryptography.__version__.split(".", maxsplit=1)[0]) < 38:
         if tpm_identity == "iak_idevid":
             logger.error(
@@ -29,7 +29,8 @@ def _check_devid_requirements() -> None:
                 "will be used for device registration",
                 tpm_identity,
             )
-
+        if pq_ca_cert:
+            logger.info("PQ CA certificate found in config: '%s'", pq_ca_cert)
 
 def main() -> None:
     logger.info("Starting Keylime registrar...")

@@ -305,55 +305,6 @@ class RegistrarAgent(PersistableModel):
         except Exception:
             raise ValueError("Invalid pq_key: not a valid Base64 string")
 
-    def _verify_pq_cert_trust_status(self, target_cert_bytes: bytes) -> bool:
-        CA_CERT_PATH = "/home/ubuntu/trust-manager/agents-pki/qubip-tls-ca-cert.pem"
-        LIB_WRAPPER_PATH = "/usr/local/lib/aurora_wrapper.so"
-        AURORA_PROVIDER_DIR = "/home/ubuntu/quantumsafe_openssl/build/lib64"
-        
-        if not os.path.exists(CA_CERT_PATH):
-            logger.error("FATAL: CA Certificate not found at %s.", CA_CERT_PATH)
-            return False
-
-        if "OPENSSL_MODULES" not in os.environ:
-            logger.info("Forcing OPENSSL_MODULES to: %s", AURORA_PROVIDER_DIR)
-            os.environ["OPENSSL_MODULES"] = AURORA_PROVIDER_DIR
-        
-        # Set LD_LIBRARY_PATH for safety (even if wrapper is static)
-        current_ld_path = os.environ.get("LD_LIBRARY_PATH", "")
-        if AURORA_PROVIDER_DIR not in current_ld_path:
-            os.environ["LD_LIBRARY_PATH"] = f"{AURORA_PROVIDER_DIR}:{current_ld_path}"
-
-        temp_cert_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".der") as temp_cert:
-                temp_cert.write(target_cert_bytes)
-                temp_cert_path = temp_cert.name
-            
-            # Instantiate the imported wrapper and call the verification
-            # Note: If LIB_WRAPPER_PATH does not exist, PQVerifier will raise FileNotFoundError
-            verifier = PQVerifier(LIB_WRAPPER_PATH)
-            
-            logger.info("Starting PQ Trust verification via PQVerifier...")
-            is_valid = verifier.verify_certificate(temp_cert_path, CA_CERT_PATH)
-
-            if is_valid:
-                 logger.info("PQ Certificate verification: SUCCESS. The certificate is correctly signed.")
-            else:
-                 logger.error("PQ Certificate verification: FAILURE.")
-                 
-            return is_valid
-
-        except Exception as e:
-            logger.error("CRITICAL ERROR in PQ verification process (Wrapper): %s", e)
-            return False
-        finally:
-            if temp_cert_path and os.path.exists(temp_cert_path):
-                try:
-                    os.remove(temp_cert_path)
-                except OSError:
-                    pass
-
-
     def update(self, data):    
         self.cast_changes(
             data,
@@ -376,7 +327,7 @@ class RegistrarAgent(PersistableModel):
 
         if pq_cert_obj:
             logger.info("PQ certificate received. Algorithm: {}...".format(data.get("pq_algorithm")))
-            CA_PATH = "/home/ubuntu/trust-manager/agents-pki/qubip-tls-ca-cert.pem" # Da config in futuro
+            CA_PATH = config.get("registrar", "pq_ca_cert")
             
             if pq_cert_obj.verify_trust(CA_PATH):
                 logger.info("PQ Certificate verification: SUCCESS.")
