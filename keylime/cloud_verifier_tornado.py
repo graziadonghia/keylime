@@ -1604,19 +1604,19 @@ async def invoke_get_quote(
                 asyncio.ensure_future(process_agent(agent, states.FAILED, failure))
                 return
 
-            result = verify_pq_signature(quote, pq_wrap_signature, pq_key_bytes) 
+            result = verify_pq_signature(quote, pq_wrap_signature, pq_key_bytes, pq_algorithm_registrar) 
 
             if result == True: 
-                logger.info("Verification of MLDSA-87 wrap signature: Valid")
+                logger.info("Verification of PQ wrap signature: Valid")
                 global counter
                 counter = 0
 
             else:
-                logger.error("Verification of MLDSA-87 signature: Not valid")
+                logger.error("Verification of PQ wrap signature: Not valid")
                 counter +=1 
                 if counter == 8:
                     failure = Failure(Component.QUOTE_VALIDATION)
-                    failure.add_event("invalid MLDSA-87 signature",{"message": "MLDSA-87 Public Key is not corresponding to the correct one"},False)
+                    failure.add_event("invalid PQ signature",{"message": "PQ Public Key is not corresponding to the correct one"},False)
                     asyncio.ensure_future(process_agent(agent, states.INVALID_QUOTE, failure))
             # validate the cloud agent response
             if "provide_V" not in agent:

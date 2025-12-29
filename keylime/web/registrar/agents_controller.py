@@ -74,7 +74,7 @@ class AgentsController(Controller):
         challenge_sig_bytes = bytes(challenge_sig)
         # # convert the challenge signature to a string
         # challenge_sig_b64 = base64.b64encode(challenge_sig_bytes).decode('ascii')
-        result = verify_pq_signature(auth_tag, challenge_sig_bytes, pq_key_bytes)
+        result = verify_pq_signature(auth_tag, challenge_sig_bytes, pq_key_bytes, pq_algorithm)
         if not result:
             self.respond(400, "Signature verification failed")
             return
