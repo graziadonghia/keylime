@@ -405,6 +405,6 @@ class RegistrarAgent(PersistableModel):
 
         # Codifica Base64 del certificato PQ
         if output.get("pq_cert"):
-            output["pq_cert"] = base64.b64encode(self.pq_cert.public_bytes(Encoding.DER)).decode("utf-8")
+            output["pq_cert"] = base64.b64encode(self.pq_cert.public_bytes()).decode("utf-8")
 
         return output

@@ -16,6 +16,7 @@ import tornado.ioloop
 import tornado.netutil
 import tornado.process
 import tornado.web
+import time # for testing
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
@@ -75,7 +76,19 @@ def get_session() -> Session:
 def get_AgentAttestStates() -> AgentAttestStates:
     return AgentAttestStates.get_instance()
 
-
+def log_verifier_metric(agent_id, network_wait_ms, pq_verify_ms, classical_verify_ms, total_ms, classical_algorithm, pq_algorithm):
+    file_path = "/tmp/verifier_metrics.csv"
+    # log first 4 digits of agent_id
+    short_agent_id = agent_id[:4]
+    write_header = not os.path.exists(file_path) or os.path.getsize(file_path) == 0
+    try:
+        with open(file_path, "a") as f:
+            if write_header:
+                f.write("agent_id,network_wait_ms,pq_verify_ms,classical_verify_ms,total_ms,classical_algorithm,pq_algorithm\n")
+            
+            f.write(f"{short_agent_id},{network_wait_ms:.5f},{pq_verify_ms:.5f},{classical_verify_ms:.5f},{total_ms:.5f},{classical_algorithm},{pq_algorithm}\n")
+    except Exception as e:
+        logger.error("Failed to write verifier metrics to file: %s", e)
 # The "exclude_db" dict values are removed from the response before adding the dict to the DB
 # This is because we want these values to remain ephemeral and not stored in the database.
 exclude_db: Dict[str, Any] = {
@@ -1519,6 +1532,12 @@ async def invoke_get_quote(
     if agent["ssl_context"]:
         kwargs["context"] = agent["ssl_context"]
 
+    # ----- TIMER START: TOTAL ------
+    t_start_total = time.perf_counter()
+
+    # ----- TIMER START: NETWORK/AGENT CALL ------
+    t_start_network = time.perf_counter()
+
     res = tornado_requests.request(
         "GET",
         f"http://{agent['ip']}:{agent['port']}/v{agent['supported_version']}/quotes/integrity"
@@ -1530,6 +1549,8 @@ async def invoke_get_quote(
 
     logger.info("Request of Integrity Quote, nonce = %s", params['nonce'])
     response = await res
+
+    t_network_duration_ms = (time.perf_counter() - t_start_network) * 1000  # in ms
     logger.info("Integrity Quote received")
 
     if response.status_code != 200:
@@ -1582,7 +1603,7 @@ async def invoke_get_quote(
             pq_cert_registrar = exclude_db["pq_cert"]
             logger.info("PQ algorithm from Registrar DB: %s", pq_algorithm_registrar)
             pq_key_registrar = bytes(exclude_db["pq_key"], encoding='utf-8')
-            logger.info("MLDSA-87 key retrieved correctly from Registrar DB\n")
+            logger.info("%s key retrieved correctly from Registrar DB\n", pq_algorithm_registrar)
             #logger.info("pq_key retrived from registrar: %s", pq_key_registrar)
             #logger.info("pq_key type: %s", type(pq_key_registrar))
             #logger.info("pq_key length: %s", len(pq_key_registrar))
@@ -1594,10 +1615,13 @@ async def invoke_get_quote(
             #print(json_response)
 
             quote = json_response.get("results", {}).get("quote").encode('utf-8')
+            classical_algorithm = json_response.get("results", {}).get("sign_alg")
             #quote_len= json_response.get("results", {}).get("quote_len")
+            # ----- TIMER START: PQ LATENCY ------
+            t_start_pq = time.perf_counter()
             pq_wrap_signature_list = json_response.get("results", {}).get("pq_wrap_signature")
             pq_wrap_signature = bytes(pq_wrap_signature_list)
-            logger.info("Size of MLDSA-87 signature over classically signed TPM quote: %s B", len(pq_wrap_signature))
+            logger.info("Size of %s signature over classically signed TPM quote: %s B", pq_algorithm_registrar, len(pq_wrap_signature))
             if pq_wrap_signature is None:
                 logger.warning("missing_fields", "One or more required fields not found in Agent's response.")
                 failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
@@ -1605,7 +1629,7 @@ async def invoke_get_quote(
                 return
 
             result = verify_pq_signature(quote, pq_wrap_signature, pq_key_bytes, pq_algorithm_registrar) 
-
+            t_pq_duration_ms = (time.perf_counter() - t_start_pq) * 1000  # in ms
             if result == True: 
                 logger.info("Verification of PQ wrap signature: Valid")
                 global counter
@@ -1626,6 +1650,8 @@ async def invoke_get_quote(
             if rmc:
                 rmc.record_create(agent, json_response, mb_policy, runtime_policy)
 
+            # ----- TIMER START: CLASSICAL VERIFY (TPM + IMA) ------
+            t_start_classical = time.perf_counter()
             failure = cloud_verifier_common.process_quote_response(
                 agent,
                 mb_policy,
@@ -1633,6 +1659,27 @@ async def invoke_get_quote(
                 json_response["results"],
                 agentAttestState,
             )
+            t_classical_duration_ms = (time.perf_counter() - t_start_classical) * 1000  # in ms
+            # ----- TIMER END: TOTAL ------
+            t_total_duration_ms = (time.perf_counter() - t_start_total) * 1000  # in ms
+
+            # ====================== LOGGING OF TIMINGS ======================
+            logger.info("Timing Summary for Integrity Quote Processing for agent %s:", agent["agent_id"])
+            logger.info(" - Network/Agent Call Duration: %.2f ms", t_network_duration_ms)
+            logger.info(" - PQ Signature Verification Duration: %.2f ms", t_pq_duration_ms)
+            logger.info(" - Classical Quote Verification Duration (TPM + IMA): %.2f ms", t_classical_duration_ms)
+            logger.info(" - TOTAL Duration: %.2f ms", t_total_duration_ms)
+
+            log_verifier_metric(
+                agent["agent_id"],
+                t_network_duration_ms,
+                t_pq_duration_ms,
+                t_classical_duration_ms,
+                t_total_duration_ms,
+                classical_algorithm,
+                pq_algorithm_registrar
+            )
+            # ================================================================
             if not failure:
                 if agent["provide_V"]:
                     asyncio.ensure_future(process_agent(agent, states.PROVIDE_V))
