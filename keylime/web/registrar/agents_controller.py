@@ -2,7 +2,9 @@ from keylime import keylime_logging
 from keylime.models import RegistrarAgent
 from keylime.web.base import Controller
 import oqs
+import os
 import base64
+import time
 from keylime.crypto import verify_pq_signature
 
 logger = keylime_logging.init_logging("registrar")
@@ -69,12 +71,26 @@ class AgentsController(Controller):
         #logger.info(f"pq_key = '{pq_key}'")
         pq_key_bytes = base64.b64decode(pq_key)
         pq_key_int_list = list(pq_key_bytes)
-        # logger.info(f"Size of MLDSA-87 signature of challenge = {len(challenge_sig)} B")
-        # # Convert the challenge signature to bytes
         challenge_sig_bytes = bytes(challenge_sig)
-        # # convert the challenge signature to a string
-        # challenge_sig_b64 = base64.b64encode(challenge_sig_bytes).decode('ascii')
+        t_start = time.perf_counter()
         result = verify_pq_signature(auth_tag, challenge_sig_bytes, pq_key_bytes, pq_algorithm)
+        t_end = time.perf_counter()
+        pq_verify_auth_ms = (t_end - t_start) * 1000
+        # --- LOG TO CSV ---
+        try:
+            csv_path = "/tmp/registrar_metrics.csv"
+            write_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+            
+            with open(csv_path, "a") as f:
+                if write_header:
+                    f.write("timestamp,agent_id,pq_algo,metric_type,duration_ms\n")
+                
+                now = int(time.time())
+                # Log specifically as 'auth_verify'
+                f.write(f"{now},{agent_id[:4]},{pq_algorithm},auth_verify,{pq_verify_auth_ms:.4f}\n")
+        except Exception as e:
+            logger.error(f"Failed to log metrics: {e}")
+        # ------------------
         if not result:
             self.respond(400, "Signature verification failed")
             return

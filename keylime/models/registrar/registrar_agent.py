@@ -20,6 +20,7 @@ from keylime.models.base import (
     LargeBinary, 
     da_manager
 )
+import time
 from keylime.models.base.types.certificate import PQCertificate
 from keylime.tpm import tpm2_objects
 from keylime.tpm.tpm_main import Tpm
@@ -324,11 +325,47 @@ class RegistrarAgent(PersistableModel):
         self._prepare_status_flags()
         self._prepare_regcount()
         pq_cert_obj = self.changes.get("pq_cert")
-
+        pq_verify_cert_ms = 0.0
         if pq_cert_obj:
             logger.info("PQ certificate received. Algorithm: {}...".format(data.get("pq_algorithm")))
             CA_PATH = config.get("registrar", "pq_ca_cert")
+            # --- METRIC START: Cert Verification ---
+            t_start = time.perf_counter()
             
+            is_trusted = pq_cert_obj.verify_trust(CA_PATH)
+            
+            t_end = time.perf_counter()
+            pq_verify_cert_ms = (t_end - t_start) * 1000
+            # --- METRIC END ---
+
+            if is_trusted:
+                logger.info("PQ Certificate verification: SUCCESS.")
+                try:
+                    pq_key_from_cert_b64 = pq_cert_obj.extract_public_key()
+                    logger.info("PQ Key extraction: SUCCESS.")
+                except ValueError as e:
+                    logger.error("PQ Key extraction: FAILURE: %s", e)
+                    self._add_error("pq_cert", f"Key extraction failed: {e}")
+            else:
+                logger.error("PQ Certificate verification: FAILURE (CA check failed).")
+                self._add_error("pq_cert", "PQ Certificate Trust verification failed against CA.")
+
+        # --- LOG TO CSV ---
+        if pq_verify_cert_ms > 0:
+            try:
+                csv_path = "/tmp/registrar_metrics.csv"
+                write_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+                
+                with open(csv_path, "a") as f:
+                    if write_header:
+                        f.write("timestamp,agent_id,pq_algo,metric_type,duration_ms\n")
+                    
+                    now = int(time.time())
+                    algo = data.get("pq_algorithm", "unknown")
+                    # Log specifically as 'cert_verify'
+                    f.write(f"{now},{self.agent_id},{algo},cert_verify,{pq_verify_cert_ms:.4f}\n")
+            except Exception as e:
+                logger.error(f"Failed to log metrics: {e}")
             if pq_cert_obj.verify_trust(CA_PATH):
                 logger.info("PQ Certificate verification: SUCCESS.")
                 # B. Estrazione Chiave (Delega alla classe PQCertificate)
