@@ -22,7 +22,7 @@ _SOCKET_PATH = "/var/run/keylime/keylime.verifier.ipc"
 # return the revocation notification methods for cloud verifier
 def get_notifiers() -> Set[str]:
     notifiers = set(config.getlist("verifier", "enabled_revocation_notifications", section="revocations"))
-    return notifiers.intersection({"zeromq", "webhook", "agent"})
+    return notifiers.intersection({"zeromq", "webhook", "agent", "l2sm"})
 
 
 def start_broker() -> None:
@@ -123,6 +123,83 @@ def notify(tosend: Dict[str, Any]) -> None:
 
     cb = functools.partial(worker, tosend)
     t = threading.Thread(target=cb)
+    t.start()
+
+
+# TODO: mapping IP - node name 
+# 192.168.159.35 - hoke
+# 192.168.159.21 - ebano
+# 192.168.159.50 - trym
+# METHOD: DELETE
+# URL: http://<IP_ADDRESS>:<PORT>/attestationFail/<NODE_NAME>
+# request.delete(URL)
+
+def map_ip_to_node(ip_address: str) -> Optional[str]:
+    ip_node_map = {
+        "192.168.159.35": "hoke",
+        "192.168.159.21": "ebano",
+        "192.168.159.50": "trym"
+    }
+    return ip_node_map.get(ip_address)
+
+def notify_l2sm_webhook(tosend: Dict[str, Any], ip_address: str) -> None:
+    node_name = map_ip_to_node(ip_address)
+    l2sm_url = config.get("verifier", "l2sm_url", section="revocations", fallback="")
+    
+    if l2sm_url == "":
+        logger.error("L2SM URL not specified")
+        return
+    if node_name is None:
+        logger.error(f"IP address {ip_address} not mapped to any node name.")
+        return
+    
+    tosend = json.bytes_to_str(tosend)
+    url = f"{l2sm_url}/{node_name}"
+    logger.info(f"Constructed L2SM webhook URL: {url}")
+
+    def worker_l2sm_webhook(tosend: Dict[str, Any], url: str) -> None:
+        interval = config.getfloat("verifier", "retry_interval")
+        exponential_backoff = config.getboolean("verifier", "exponential_backoff")
+
+        max_retries = config.getint("verifier", "max_retries")
+        if max_retries <= 0:
+            logger.info("Invalid value found in 'max_retries' option for verifier, using default value")
+            max_retries = 5
+
+        # <--- DEDENTED (moved left) to run every time
+        logger.info("Sending revocation event via webhook to %s ...", url)
+        for i in range(max_retries):
+            next_retry = retry.retry_time(exponential_backoff, interval, i, logger)
+
+            try:
+                res = requests.delete(url, json=tosend, timeout=5)
+            except requests.exceptions.RequestException as e:
+                logger.warning(
+                    "Unable to publish revocation message %d times via L2SM webhook, "
+                    "trying again in %d seconds: %s",
+                    i + 1,
+                    next_retry,
+                    e,
+                )
+                time.sleep(next_retry)
+                continue
+
+            if res and res.status_code in [200, 202]:
+                break
+
+            logger.warning(
+                "Unable to publish revocation message %d times via L2SM webhook, "
+                "trying again in %d seconds. "
+                "Server returned status code: %s",
+                i + 1,
+                next_retry,
+                res.status_code,
+            )
+
+            time.sleep(next_retry)
+
+    w = functools.partial(worker_l2sm_webhook, tosend, url)
+    t = threading.Thread(target=w, daemon=True)
     t.start()
 
 

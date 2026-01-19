@@ -68,6 +68,19 @@ except record.RecordManagementException as rme:
     logger.error("Error initializing Durable Attestation: %s", rme)
     sys.exit(1)
 
+# Add this global or helper function if not already present
+def log_bandwidth_metric(agent_id, payload_bytes, duration_sec, throughput_mbps):
+    file_path = "/tmp/verifier_bandwidth.csv"
+    short_agent_id = agent_id[:4]
+    write_header = not os.path.exists(file_path) or os.path.getsize(file_path) == 0
+    try:
+        with open(file_path, "a") as f:
+            if write_header:
+                f.write("timestamp,agent_id,payload_bytes,duration_sec,throughput_mbps\n")
+            
+            f.write(f"{time.time()},{short_agent_id},{payload_bytes},{duration_sec:.5f},{throughput_mbps:.5f}\n")
+    except Exception as e:
+        logger.error("Failed to write bandwidth metrics: %s", e)
 
 def get_session() -> Session:
     return SessionManager().make_session(engine)
@@ -1550,8 +1563,28 @@ async def invoke_get_quote(
     logger.info("Request of Integrity Quote, nonce = %s", params['nonce'])
     response = await res
 
+    # ----- METRIC CALCULATION START (Bandwidth) ------
+    t_net_end = time.perf_counter()
+    t_network_duration_s = t_net_end - t_start_network
+    t_network_duration_ms = t_network_duration_s * 1000  # in ms
+    
+    # Calculate payload size
+    # response.body is raw bytes
+    payload_bytes = len(response.body) if response.body else 0
+
+    # Calculate throughput (Mbps)
+    # Avoid division by zero
+    throughput_mbps = 0.0
+    if t_network_duration_s > 0:
+        bits = payload_bytes
+        mbps = bits / 1_000_000
+        throughput_mbps = mbps / t_network_duration_s
+    
+    # LOG to CSV
+    log_bandwidth_metric(agent["agent_id"], payload_bytes, t_network_duration_s, throughput_mbps)
+
     t_network_duration_ms = (time.perf_counter() - t_start_network) * 1000  # in ms
-    logger.info("Integrity Quote received")
+    logger.info("Integrity Quote received. Size: %s B, Time: %.2f ms, Throughput: %.2f Mbps", payload_bytes, t_network_duration_ms, throughput_mbps)
 
     if response.status_code != 200:
         # this is a connection error, retry get quote
@@ -1627,7 +1660,7 @@ async def invoke_get_quote(
                 failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
                 asyncio.ensure_future(process_agent(agent, states.FAILED, failure))
                 return
-
+            logger.info("Verifying PQ signature over classically signed TPM quote using %s algorithm", pq_algorithm_registrar)
             result = verify_pq_signature(quote, pq_wrap_signature, pq_key_bytes, pq_algorithm_registrar) 
             t_pq_duration_ms = (time.perf_counter() - t_start_pq) * 1000  # in ms
             if result == True: 
@@ -1818,11 +1851,15 @@ async def notify_error(
     notifiers = revocation_notifier.get_notifiers()
     if len(notifiers) == 0:
         return
-
+    
+    logger.info("Notifying error to notifiers: %s", notifiers)
     tosend = cloud_verifier_common.prepare_error(agent, msgtype, event)
     if "webhook" in notifiers:
         logger.info("Sending error notification to webhook")
         revocation_notifier.notify_webhook(tosend)
+    if "l2sm" in notifiers:
+        logger.info("Sending error notification to L2SM controller")
+        revocation_notifier.notify_l2sm_webhook(tosend, agent["ip"])
     if "zeromq" in notifiers:
         logger.info("Sending error notification to zeromq")
         revocation_notifier.notify(tosend)

@@ -343,6 +343,7 @@ class RegistrarAgent(PersistableModel):
                 try:
                     pq_key_from_cert_b64 = pq_cert_obj.extract_public_key()
                     logger.info("PQ Key extraction: SUCCESS.")
+                    #self.change("pq_key", pq_key_from_cert_b64)
                 except ValueError as e:
                     logger.error("PQ Key extraction: FAILURE: %s", e)
                     self._add_error("pq_cert", f"Key extraction failed: {e}")
