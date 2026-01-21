@@ -69,16 +69,17 @@ except record.RecordManagementException as rme:
     sys.exit(1)
 
 # Add this global or helper function if not already present
-def log_bandwidth_metric(agent_id, payload_bytes, duration_sec, throughput_mbps):
-    file_path = "/tmp/verifier_bandwidth.csv"
+def log_bandwidth_metric(agent_id, cycle_count, payload_bytes, duration_sec, throughput_kbps):
+    # name file with date to avoid too large files
+    file_path = f"/tmp/{time.strftime('%Y-%m-%d')}_verifier_bandwidth.csv"
     short_agent_id = agent_id[:4]
     write_header = not os.path.exists(file_path) or os.path.getsize(file_path) == 0
     try:
         with open(file_path, "a") as f:
             if write_header:
-                f.write("timestamp,agent_id,payload_bytes,duration_sec,throughput_mbps\n")
+               f.write("timestamp,agent_id,cycle,payload_bytes,duration_sec,throughput_kbps\n")
             
-            f.write(f"{time.time()},{short_agent_id},{payload_bytes},{duration_sec:.5f},{throughput_mbps:.5f}\n")
+            f.write(f"{time.time()},{short_agent_id},{cycle_count},{payload_bytes},{duration_sec:.5f},{throughput_kbps:.5f}\n")
     except Exception as e:
         logger.error("Failed to write bandwidth metrics: %s", e)
 
@@ -111,6 +112,7 @@ exclude_db: Dict[str, Any] = {
     "provide_V": True,
     "num_retries": 0,
     "pending_event": None,
+    "test_cycle_count": 0, # <--- keep te counter out of the DB
     # the following 3 items are updated to VerifierDB only when the AgentState is stored
     "boottime": "",
     "ima_pcrs": [],
@@ -1544,6 +1546,19 @@ async def invoke_get_quote(
     kwargs = {}
     if agent["ssl_context"]:
         kwargs["context"] = agent["ssl_context"]
+    
+    if "test_cycle_count"not in agent:
+        agent["test_cycle_count"] = 0 # initialize test_cycle_count if not present
+    
+    agent["test_cycle_count"] += 1
+    current_cycle = agent["test_cycle_count"]
+
+    # testsheet asks to perform 1000 remote attestation cycles
+    if current_cycle > 1000:
+        logger.info(f"Test complete: 1000 cycles reached for agent {agent['agent_id']}")
+    
+    else:
+        logger.info(f"Starting remote attestation cycle {current_cycle} for agent {agent['agent_id']}")
 
     # ----- TIMER START: TOTAL ------
     t_start_total = time.perf_counter()
@@ -1572,19 +1587,19 @@ async def invoke_get_quote(
     # response.body is raw bytes
     payload_bytes = len(response.body) if response.body else 0
 
-    # Calculate throughput (Mbps)
+    # Calculate throughput (kbps)
     # Avoid division by zero
-    throughput_mbps = 0.0
+    throughput_kbps = 0.0
     if t_network_duration_s > 0:
-        bits = payload_bytes
-        mbps = bits / 1_000_000
-        throughput_mbps = mbps / t_network_duration_s
+        bits = payload_bytes * 8  # bytes to bits
+        kbps = bits / 1_000
+        throughput_kbps = kbps / t_network_duration_s
     
-    # LOG to CSV
-    log_bandwidth_metric(agent["agent_id"], payload_bytes, t_network_duration_s, throughput_mbps)
+    if current_cycle <= 1000:
+        log_bandwidth_metric(agent["agent_id"], current_cycle, payload_bytes, t_network_duration_s, throughput_kbps)
 
     t_network_duration_ms = (time.perf_counter() - t_start_network) * 1000  # in ms
-    logger.info("Integrity Quote received. Size: %s B, Time: %.2f ms, Throughput: %.2f Mbps", payload_bytes, t_network_duration_ms, throughput_mbps)
+    logger.info("Integrity Quote received. Size: %s B, Time: %.2f ms, Throughput: %.2f kbps", payload_bytes, t_network_duration_ms, throughput_kbps)
 
     if response.status_code != 200:
         # this is a connection error, retry get quote
