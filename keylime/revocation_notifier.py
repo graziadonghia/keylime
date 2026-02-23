@@ -6,7 +6,7 @@ import threading
 import time
 from multiprocessing import Process
 from typing import Any, Callable, Dict, Optional, Set
-
+import json
 import requests
 
 from keylime import config, crypto, json, keylime_logging, web_util
@@ -142,64 +142,97 @@ def map_ip_to_node(ip_address: str) -> Optional[str]:
     }
     return ip_node_map.get(ip_address)
 
+# --- Helper to log the metrics to CSV ---
+def log_l2sm_response_metrics(node_name, t_detect, t_send, t_recv, l2sm_ts_iso, l2sm_duration):
+    # CSV file to store the Verifier side of the measurements
+    csv_path = "/tmp/verifier_l2sm_detection_metrics.csv"
+    
+    file_exists = os.path.exists(csv_path)
+    try:
+        with open(csv_path, "a") as f:
+            if not file_exists:
+                # Header definition:
+                # t_detect: Verifier logic decides node is bad
+                # t_send:   Verifier sends HTTP DELETE
+                # t_recv:   Verifier receives HTTP 200 (L2SM finished)
+                # l2sm_ts:  The 'request_detected_at' string from L2SM
+                # l2sm_dur: The 'execution_time_seconds' float from L2SM
+                f.write("node_name,t_detect_unix,t_send_unix,t_recv_unix,l2sm_detected_at,l2sm_duration_s\n")
+            
+            f.write(f"{node_name},{t_detect},{t_send},{t_recv},{l2sm_ts_iso},{l2sm_duration}\n")
+            
+        logger.info(f"Logged L2SM metrics to {csv_path}")
+    except Exception as e:
+        logger.error(f"Failed to log L2SM metrics: {e}")
+
 def notify_l2sm_webhook(tosend: Dict[str, Any], ip_address: str) -> None:
-    node_name = map_ip_to_node(ip_address)
+    # 1. Capture Detection Timestamp (Verifier logic triggered)
+    t_detect = time.time()
+
+    json_payload = json.bytes_to_str(tosend)
+    logger.info(f"Agent IP address: {ip_address} - Detected revocation event, preparing to notify L2SM Controller...")
+    
+    node_name = map_ip_to_node(ip_address) 
+    logger.info(f"Mapped IP {ip_address} to node name: {node_name}")
+
     l2sm_url = config.get("verifier", "l2sm_url", section="revocations", fallback="")
-    
     if l2sm_url == "":
-        logger.error("L2SM URL not specified")
+        logger.error("L2SM URL not specified in verifier.conf")
         return
-    if node_name is None:
-        logger.error(f"IP address {ip_address} not mapped to any node name.")
-        return
-    
-    tosend = json.bytes_to_str(tosend)
+
     url = f"{l2sm_url}/{node_name}"
-    logger.info(f"Constructed L2SM webhook URL: {url}")
+    
+    # We define the worker function inside to capture the closure variables
+    def worker_l2sm_request(url: str, json_payload: Dict[str, Any], t_detect_time: float):
+        max_retries = config.getint("verifier", "max_retries", fallback=5)
+        retry_interval = config.getfloat("verifier", "retry_interval", fallback=2.0)
+        
+        logger.info(f"Contacting L2SM Controller at {url}...")
 
-    def worker_l2sm_webhook(tosend: Dict[str, Any], url: str) -> None:
-        interval = config.getfloat("verifier", "retry_interval")
-        exponential_backoff = config.getboolean("verifier", "exponential_backoff")
-
-        max_retries = config.getint("verifier", "max_retries")
-        if max_retries <= 0:
-            logger.info("Invalid value found in 'max_retries' option for verifier, using default value")
-            max_retries = 5
-
-        # <--- DEDENTED (moved left) to run every time
-        logger.info("Sending revocation event via webhook to %s ...", url)
         for i in range(max_retries):
-            next_retry = retry.retry_time(exponential_backoff, interval, i, logger)
-
             try:
-                res = requests.delete(url, json=tosend, timeout=5)
+                # 2. Capture Send Timestamp
+                t_send = time.time()
+                
+                # Send DELETE request. Note: timeout is high (300s) because L2SM 
+                # might take a while to physically delete the switch/flows.
+                res = requests.delete(url, json=json_payload, timeout=300)
+                
+                # 3. Capture Receive Timestamp (Response arrived)
+                t_recv = time.time()
+
+                if res.status_code in [200, 202]:
+                    logger.info("L2SM Controller processed revocation successfully.")
+                    
+                    # 4. Parse the specific L2SM Payload
+                    # Expected: {"status":"deleted", "request_detected_at":"...", "execution_time_seconds":...}
+                    try:
+                        data = res.json()
+                        l2sm_ts = data.get("request_detected_at", "N/A")
+                        l2sm_exec = data.get("execution_time_seconds", 0.0)
+
+                        # print l2sm response for debug purposes
+                        logger.info(f"L2SM payload: {data}")
+                        log_l2sm_response_metrics(
+                            node_name, t_detect_time, t_send, t_recv, l2sm_ts, l2sm_exec
+                        )
+                    except Exception as e:
+                        logger.error(f"L2SM responded 200 but payload parsing failed: {e}")
+                    
+                    break # Success, exit loop
+                else:
+                    logger.warning(
+                        f"L2SM returned status {res.status_code}. Retrying {i+1}/{max_retries}..."
+                    )
+            
             except requests.exceptions.RequestException as e:
-                logger.warning(
-                    "Unable to publish revocation message %d times via L2SM webhook, "
-                    "trying again in %d seconds: %s",
-                    i + 1,
-                    next_retry,
-                    e,
-                )
-                time.sleep(next_retry)
-                continue
+                logger.warning(f"L2SM connection failed: {e}. Retrying {i+1}/{max_retries}...")
+            
+            time.sleep(retry_interval)
 
-            if res and res.status_code in [200, 202]:
-                break
-
-            logger.warning(
-                "Unable to publish revocation message %d times via L2SM webhook, "
-                "trying again in %d seconds. "
-                "Server returned status code: %s",
-                i + 1,
-                next_retry,
-                res.status_code,
-            )
-
-            time.sleep(next_retry)
-
-    w = functools.partial(worker_l2sm_webhook, tosend, url)
-    t = threading.Thread(target=w, daemon=True)
+    # Launch in a thread so we don't block the Verifier's main loop
+    # Passing t_detect explicitly
+    t = threading.Thread(target=worker_l2sm_request, args=(url, json_payload, t_detect), daemon=True)
     t.start()
 
 

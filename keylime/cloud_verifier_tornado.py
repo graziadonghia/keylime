@@ -71,7 +71,7 @@ except record.RecordManagementException as rme:
 # Add this global or helper function if not already present
 def log_bandwidth_metric(agent_id, cycle_count, payload_bytes, duration_sec, throughput_kbps):
     # name file with date to avoid too large files
-    file_path = f"/tmp/{time.strftime('%Y-%m-%d')}_verifier_bandwidth.csv"
+    file_path = f"/tmp/qubip_GA_verifier_bandwidth_UC3.csv"
     short_agent_id = agent_id[:4]
     write_header = not os.path.exists(file_path) or os.path.getsize(file_path) == 0
     try:
@@ -90,17 +90,17 @@ def get_session() -> Session:
 def get_AgentAttestStates() -> AgentAttestStates:
     return AgentAttestStates.get_instance()
 
-def log_verifier_metric(agent_id, network_wait_ms, pq_verify_ms, classical_verify_ms, total_ms, classical_algorithm, pq_algorithm):
-    file_path = "/tmp/verifier_metrics.csv"
+def log_verifier_metric(timestamp_unix, agent_id, network_wait_ms, pq_verify_ms, classical_verify_ms, total_ms, classical_algorithm, pq_algorithm, total_classical_ms):
+    file_path = "/tmp/qubip_GA_verifier_metrics_UC3.csv"
     # log first 4 digits of agent_id
     short_agent_id = agent_id[:4]
     write_header = not os.path.exists(file_path) or os.path.getsize(file_path) == 0
     try:
         with open(file_path, "a") as f:
             if write_header:
-                f.write("agent_id,network_wait_ms,pq_verify_ms,classical_verify_ms,total_ms,classical_algorithm,pq_algorithm\n")
+                f.write("timestamp_unix,agent_id,network_wait_ms,pq_verify_ms,classical_verify_ms,total_ms,classical_algorithm,pq_algorithm,total_classical_ms\n")
             
-            f.write(f"{short_agent_id},{network_wait_ms:.5f},{pq_verify_ms:.5f},{classical_verify_ms:.5f},{total_ms:.5f},{classical_algorithm},{pq_algorithm}\n")
+            f.write(f"{timestamp_unix:.6f},{short_agent_id},{network_wait_ms:.5f},{pq_verify_ms:.5f},{classical_verify_ms:.5f},{total_ms:.5f},{classical_algorithm},{pq_algorithm},{total_classical_ms:.5f}\n")
     except Exception as e:
         logger.error("Failed to write verifier metrics to file: %s", e)
 # The "exclude_db" dict values are removed from the response before adding the dict to the DB
@@ -125,7 +125,7 @@ exclude_db: Dict[str, Any] = {
     "pq_cert" : "",
 }
 
-
+    
 def _from_db_obj(agent_db_obj: VerfierMain) -> Dict[str, Any]:
     fields = [
         "agent_id",
@@ -1710,6 +1710,8 @@ async def invoke_get_quote(
             t_classical_duration_ms = (time.perf_counter() - t_start_classical) * 1000  # in ms
             # ----- TIMER END: TOTAL ------
             t_total_duration_ms = (time.perf_counter() - t_start_total) * 1000  # in ms
+            t_total_classical_ms = t_total_duration_ms - t_pq_duration_ms
+            current_timestamp = time.time()
 
             # ====================== LOGGING OF TIMINGS ======================
             logger.info("Timing Summary for Integrity Quote Processing for agent %s:", agent["agent_id"])
@@ -1719,13 +1721,15 @@ async def invoke_get_quote(
             logger.info(" - TOTAL Duration: %.2f ms", t_total_duration_ms)
 
             log_verifier_metric(
+                current_timestamp,
                 agent["agent_id"],
                 t_network_duration_ms,
                 t_pq_duration_ms,
                 t_classical_duration_ms,
                 t_total_duration_ms,
                 classical_algorithm,
-                pq_algorithm_registrar
+                pq_algorithm_registrar,
+                t_total_classical_ms
             )
             # ================================================================
             if not failure:
