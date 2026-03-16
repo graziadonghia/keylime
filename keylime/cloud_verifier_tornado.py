@@ -44,9 +44,6 @@ from keylime.failure import MAX_SEVERITY_LABEL, Component, Event, Failure, set_s
 from keylime.ima import ima
 from keylime.mba import mba
 
-# file with algorithms 
-counter = 0
-
 logger = keylime_logging.init_logging("verifier")
 
 
@@ -114,6 +111,7 @@ exclude_db: Dict[str, Any] = {
     "pending_event": None,
     "test_cycle_count": 0, # <--- keep te counter out of the DB
     # the following 3 items are updated to VerifierDB only when the AgentState is stored
+    "pq_counter": 0,
     "boottime": "",
     "ima_pcrs": [],
     "pcr10": "",
@@ -588,10 +586,6 @@ class AgentsHandler(BaseHandler):
                         "last_successful_attestation": 0,
                     }
 
-                    exclude_db["pq_key"] = json_body["pq_key"]
-                    exclude_db["pq_algorithm"] = json_body["pq_algorithm"]
-                    exclude_db["pq_cert"] = json_body["pq_cert"]
-
                     if "verifier_ip" in json_body:
                         agent_data["verifier_ip"] = json_body["verifier_ip"]
                     else:
@@ -807,7 +801,14 @@ class AgentsHandler(BaseHandler):
 
                     # add default fields that are ephemeral
                     for key, val in exclude_db.items():
-                        agent_data[key] = val
+                        agent_data.setdefault(key, val)
+
+                    # Bind the PQ keys ONLY to this specific agent's in-memory dictionary
+                    agent_data["pq_key"] = json_body.get("pq_key", "")
+                    agent_data["pq_algorithm"] = json_body.get("pq_algorithm", "")
+                    agent_data["pq_cert"] = json_body.get("pq_cert", "")
+
+                    # Prepare SSLContext for mTLS connections
 
                     # Prepare SSLContext for mTLS connections
                     agent_data["ssl_context"] = None
@@ -1645,51 +1646,49 @@ async def invoke_get_quote(
     else:
         try:
 
-            # retrieve pq_key from registrar db
-            print(type(exclude_db["pq_key"]))
-            pq_algorithm_registrar = exclude_db["pq_algorithm"]
-            pq_cert_registrar = exclude_db["pq_cert"]
-            logger.info("PQ algorithm from Registrar DB: %s", pq_algorithm_registrar)
-            pq_key_registrar = bytes(exclude_db["pq_key"], encoding='utf-8')
-            logger.info("%s key retrieved correctly from Registrar DB\n", pq_algorithm_registrar)
-            #logger.info("pq_key retrived from registrar: %s", pq_key_registrar)
-            #logger.info("pq_key type: %s", type(pq_key_registrar))
-            #logger.info("pq_key length: %s", len(pq_key_registrar))
-            #logger.info("DECODING PQ KEY")
+            # retrieve pq_key directly from this specific agent's memory
+            pq_algorithm_registrar = agent.get("pq_algorithm", "")
+            pq_cert_registrar = agent.get("pq_cert", "")
+            logger.info("PQ algorithm for Agent %s: %s", agent["agent_id"], pq_algorithm_registrar)
+            
+            pq_key_registrar = bytes(agent.get("pq_key", ""), encoding='utf-8')
             pq_key_bytes = base64.b64decode(pq_key_registrar)
-            #logger.info("pq_key decoded: %s", pq_key_bytes)
-            #logger.info("pq_key decoded length: %s", len(pq_key_bytes))
+            
             json_response = json.loads(response.body)
-            #print(json_response)
 
             quote = json_response.get("results", {}).get("quote").encode('utf-8')
             classical_algorithm = json_response.get("results", {}).get("sign_alg")
-            #quote_len= json_response.get("results", {}).get("quote_len")
+            
             # ----- TIMER START: PQ LATENCY ------
             t_start_pq = time.perf_counter()
             pq_wrap_signature_list = json_response.get("results", {}).get("pq_wrap_signature")
-            pq_wrap_signature = bytes(pq_wrap_signature_list)
-            logger.info("Size of %s signature over classically signed TPM quote: %s B", pq_algorithm_registrar, len(pq_wrap_signature))
-            if pq_wrap_signature is None:
-                logger.warning("missing_fields", "One or more required fields not found in Agent's response.")
+            
+            # SAFELY check if signature exists before attempting to convert to bytes
+            if not pq_wrap_signature_list:
+                logger.warning("One or more required fields not found in Agent's response.")
                 failure.add_event("missing_fields", "One or more required fields not found in Agent's response", False)
                 asyncio.ensure_future(process_agent(agent, states.FAILED, failure))
                 return
+                
+            pq_wrap_signature = bytes(pq_wrap_signature_list)
+            logger.info("Size of %s signature over classically signed TPM quote: %s B", pq_algorithm_registrar, len(pq_wrap_signature))
+            
             logger.info("Verifying PQ signature over classically signed TPM quote using %s algorithm", pq_algorithm_registrar)
             result = verify_pq_signature(quote, pq_wrap_signature, pq_key_bytes, pq_algorithm_registrar) 
             t_pq_duration_ms = (time.perf_counter() - t_start_pq) * 1000  # in ms
+            
             if result == True: 
                 logger.info("Verification of PQ wrap signature: Valid")
-                global counter
-                counter = 0
+                agent["pq_counter"] = 0 # Use agent-specific counter
 
             else:
                 logger.error("Verification of PQ wrap signature: Not valid")
-                counter +=1 
-                if counter == 8:
+                agent["pq_counter"] = agent.get("pq_counter", 0) + 1 
+                if agent["pq_counter"] >= 8:
                     failure = Failure(Component.QUOTE_VALIDATION)
                     failure.add_event("invalid PQ signature",{"message": "PQ Public Key is not corresponding to the correct one"},False)
                     asyncio.ensure_future(process_agent(agent, states.INVALID_QUOTE, failure))
+                    return # Prevent classical verification from running
             # validate the cloud agent response
             if "provide_V" not in agent:
                 agent["provide_V"] = True
