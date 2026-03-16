@@ -145,7 +145,7 @@ def map_ip_to_node(ip_address: str) -> Optional[str]:
 # --- Helper to log the metrics to CSV ---
 def log_l2sm_response_metrics(node_name, t_detect, t_send, t_recv, l2sm_ts_iso, l2sm_duration):
     # CSV file to store the Verifier side of the measurements
-    csv_path = "/tmp/verifier_l2sm_detection_metrics.csv"
+    csv_path = "/tmp/verifier_l2sm_detection_metric_attacks.csv"
     
     file_exists = os.path.exists(csv_path)
     try:

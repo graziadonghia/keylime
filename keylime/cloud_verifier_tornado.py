@@ -71,7 +71,7 @@ except record.RecordManagementException as rme:
 # Add this global or helper function if not already present
 def log_bandwidth_metric(agent_id, cycle_count, payload_bytes, duration_sec, throughput_kbps):
     # name file with date to avoid too large files
-    file_path = f"/tmp/qubip_GA_verifier_bandwidth_UC3.csv"
+    file_path = f"/tmp/baseline_verifier_bandwidth_attack.csv"
     short_agent_id = agent_id[:4]
     write_header = not os.path.exists(file_path) or os.path.getsize(file_path) == 0
     try:
@@ -91,7 +91,7 @@ def get_AgentAttestStates() -> AgentAttestStates:
     return AgentAttestStates.get_instance()
 
 def log_verifier_metric(timestamp_unix, agent_id, network_wait_ms, pq_verify_ms, classical_verify_ms, total_ms, classical_algorithm, pq_algorithm, total_classical_ms):
-    file_path = "/tmp/qubip_GA_verifier_metrics_UC3.csv"
+    file_path = "/tmp/baseline_verifier_metrics_attack.csv"
     # log first 4 digits of agent_id
     short_agent_id = agent_id[:4]
     write_header = not os.path.exists(file_path) or os.path.getsize(file_path) == 0
