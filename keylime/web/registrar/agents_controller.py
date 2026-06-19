@@ -65,15 +65,33 @@ class AgentsController(Controller):
 
         accepted = agent.verify_ak_response(auth_tag)
         pq_key = agent.pq_key
-        pq_algorithm = agent.pq_algorithm
         pq_cert = agent.pq_cert
-        logger.info(f"Using PQ algorithm: {pq_algorithm}")
+        raw_pq_algorithm = agent.pq_algorithm
+        # --- OPENSSL TO LIBOQS MAPPING DICTIONARY ---
+        # Maps the names sent by the OpenSSL Agent to the strict names required by liboqs
+        OQS_ALG_MAP = {
+            "slh-dsa-shake-256s": "SLH_DSA_PURE_SHAKE_256S",
+            "slh-dsa-shake-256f": "SLH_DSA_PURE_SHAKE_256F",
+            "slh-dsa-sha2-256s":  "SLH_DSA_PURE_SHA2_256S",
+            "slh-dsa-sha2-256f":  "SLH_DSA_PURE_SHA2_256F",
+            "ml-dsa-44":          "ML-DSA-44",
+            "ml-dsa-65":          "ML-DSA-65",
+            "ml-dsa-87":          "ML-DSA-87",
+        }
+        
+        # Translate the algorithm name, defaulting to the raw string if not in the map
+        pq_algorithm = OQS_ALG_MAP.get(raw_pq_algorithm.lower(), raw_pq_algorithm)
+        # --------------------------------------------
+
+        logger.info(f"Agent requested: {raw_pq_algorithm}. Mapped to liboqs PQ algorithm: {pq_algorithm}")
         #logger.info(f"pq_key = '{pq_key}'")
         pq_key_bytes = base64.b64decode(pq_key)
         pq_key_int_list = list(pq_key_bytes)
         challenge_sig_bytes = bytes(challenge_sig)
         t_start = time.perf_counter()
+        logger.info(f"Verifying PQ signature")
         result = verify_pq_signature(auth_tag, challenge_sig_bytes, pq_key_bytes, pq_algorithm)
+        logger.info("PQ signature verification succeeded")
         t_end = time.perf_counter()
         pq_verify_auth_ms = (t_end - t_start) * 1000
         # --- LOG TO CSV ---

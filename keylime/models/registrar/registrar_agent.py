@@ -327,7 +327,8 @@ class RegistrarAgent(PersistableModel):
         pq_cert_obj = self.changes.get("pq_cert")
         pq_verify_cert_ms = 0.0
         if pq_cert_obj:
-            logger.info("PQ certificate received. Algorithm: {}...".format(data.get("pq_algorithm")))
+            pq_algorithm_name = data.get("pq_algorithm")
+            logger.info("PQ certificate received. Algorithm: {}...".format(pq_algorithm_name))
             CA_PATH = config.get("registrar", "pq_ca_cert")
             # --- METRIC START: Cert Verification ---
             t_start = time.perf_counter()
@@ -341,7 +342,7 @@ class RegistrarAgent(PersistableModel):
             if is_trusted:
                 logger.info("PQ Certificate verification: SUCCESS.")
                 try:
-                    pq_key_from_cert_b64 = pq_cert_obj.extract_public_key()
+                    pq_key_from_cert_b64 = pq_cert_obj.extract_public_key(pq_algorithm_name)
                     logger.info("PQ Key extraction: SUCCESS.")
                     self.change("pq_key", pq_key_from_cert_b64)
                 except ValueError as e:
@@ -371,7 +372,7 @@ class RegistrarAgent(PersistableModel):
                 logger.info("PQ Certificate verification: SUCCESS.")
                 # B. Estrazione Chiave (Delega alla classe PQCertificate)
                 try:
-                    pq_key_from_cert_b64 = pq_cert_obj.extract_public_key()
+                    pq_key_from_cert_b64 = pq_cert_obj.extract_public_key(pq_algorithm_name)
                     logger.info("PQ Key extraction: SUCCESS.")
                 except ValueError as e:
                     logger.error("PQ Key extraction: FAILURE: %s", e)

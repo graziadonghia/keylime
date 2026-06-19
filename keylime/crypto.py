@@ -21,11 +21,26 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 aes_block_size = 16
 
 def verify_pq_signature(message, signature, signer_public_key, sigalg):
+    # --- DEBUG: Print all supported liboqs algorithms ---
+    supported_algs = oqs.get_supported_sig_mechanisms()
+    print(f"\n[DEBUG] verify_pq_signature called with requested algorithm: '{sigalg}'")
+    print(f"[DEBUG] liboqs currently supports the following signature mechanisms:")
+    # ----------------------------------------------------
+
     encoded_message = message if isinstance(message, bytes) else bytes(message, encoding="utf-8")
-    with oqs.Signature(sigalg.upper()) as signer:
-        with oqs.Signature(sigalg.upper()) as verifier:
-            is_valid = verifier.verify(encoded_message, signature, signer_public_key)
-            return is_valid
+    
+    # liboqs algorithm strings are case-sensitive.
+    # We dynamically find the exactly matched string from liboqs's supported mechanisms, ignoring case.
+    correct_alg_name = sigalg.upper() # Fallback default
+    
+    for alg in supported_algs:
+        if alg.lower() == sigalg.lower():
+            correct_alg_name = alg
+            break
+
+    with oqs.Signature(correct_alg_name) as verifier:
+        is_valid = verifier.verify(encoded_message, signature, signer_public_key)
+        return is_valid
 
 def rsa_import_pubkey(pubkey: Union[str, bytes]) -> RSAPublicKey:
     """Import a public key

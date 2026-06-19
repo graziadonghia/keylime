@@ -28,7 +28,11 @@ logger = logging.getLogger(__name__)
 # Make sure this path is correct on your system
 LIB_WRAPPER_PATH = "/usr/local/lib/aurora_wrapper.so"
 AURORA_PROVIDER_DIR = "/home/ubuntu/quantumsafe_openssl/build/lib64"
-EXPECTED_PQ_KEY_SIZE = 2592 
+ALGO_NAMES_PK_SIZES = {
+    "ml-dsa-87": 2592,
+    "slh-dsa-shake-256s": 64 
+}
+
 
 class Certificate(ModelType):
     """The Certificate class implements the model type API... (omitted)"""
@@ -148,7 +152,7 @@ class PQVerifier:
             self.lib = ctypes.CDLL(lib_path, mode=dl_flags)
             self.lib.verify_certificate_file.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
             self.lib.verify_certificate_file.restype = ctypes.c_int
-            
+            logger.info("Aurora wrapper loaded")
         except OSError as e:
             logger.error("Unable to load PQ Wrapper library: %s", e)
             raise
@@ -202,19 +206,19 @@ class PQX509Certificate:
             logger.error("PQ Trust Verification exception: %s", e)
             return False
 
-    def extract_public_key(self) -> str:
+    def extract_public_key(self, algorithm_name) -> str:
         try:
             tbs = self._asn1_obj['tbs_certificate']
-            # Access by fixed index (6) to SPKI and re-parsing
-            spki_container = tbs[6]
+            # Access by dictionary key rather than fixed index to avoid ASN.1 shifting issues
+            spki_container = tbs['subject_public_key_info']
             spki_raw = spki_container.dump()
             spki_seq = Sequence.load(spki_raw)
             
             # Extraction BitString (index 1) and raw content (skipping padding byte)
             raw_bytes = spki_seq[1].contents[1:]
-            
-            if len(raw_bytes) != EXPECTED_PQ_KEY_SIZE:
-                 raise ValueError(f"Size mismatch: got {len(raw_bytes)}, expected {EXPECTED_PQ_KEY_SIZE}")
+            expected_pq_pk_size = ALGO_NAMES_PK_SIZES[algorithm_name]
+            if len(raw_bytes) != expected_pq_pk_size:
+                 raise ValueError(f"Size mismatch: got {len(raw_bytes)}, expected {expected_pq_pk_size}")
             
             return base64.b64encode(raw_bytes).decode("ascii")
         except Exception as e:
@@ -227,7 +231,6 @@ class PQCertificate(ModelType):
     Saves to DB as Base64 string of DER.
     """
     
-    # Added 'list' to supported types
     IncomingValue: TypeAlias = Union[PQX509Certificate, bytes, str, list, None]
 
     def __init__(self) -> None:
@@ -245,29 +248,41 @@ class PQCertificate(ModelType):
         if isinstance(value, bytes):
              der_data = value
         elif isinstance(value, list):
-             # Gestione LISTA di interi (dal JSON dell'agent) -> Bytes
              try:
                  der_data = bytes(value)
              except Exception as e:
                  raise ValueError(f"PQCertificate input list could not be converted to bytes: {e}")
         elif isinstance(value, str):
-            try:
-                der_data = base64.b64decode(value, validate=True)
-            except (binascii.Error, ValueError):
-                 # If base64 decoding fails, it might be a PEM string or garbage.
-                 # Let's check if it's PEM, otherwise raise an error.
-                 if "BEGIN CERTIFICATE" in value:
-                      # TODO: handle PEM PQ if necessary (requires custom conversion)
-                      raise ValueError("PQCertificate PEM input not yet supported, use DER bytes/base64")
-                 raise ValueError("PQCertificate input string must be Base64 encoded DER")
+            # Check if it's sent as raw PEM text directly
+            if "-----BEGIN CERTIFICATE-----" in value:
+                der_data = value.encode('utf-8')
+            else:
+                try:
+                    # Try to base64 decode it (Agent might have encoded the whole PEM file)
+                    der_data = base64.b64decode(value, validate=True)
+                except (binascii.Error, ValueError):
+                    raise ValueError("PQCertificate input string must be Base64 encoded DER or PEM")
         
         if der_data:
+            # If the data contains PEM markers, strip the OpenSSL text and convert to pure DER
+            if b"-----BEGIN CERTIFICATE-----" in der_data:
+                try:
+                    pem_str = der_data.decode('utf-8')
+                    # Extract only the base64 payload between the BEGIN and END markers
+                    b64_cert = pem_str.split("-----BEGIN CERTIFICATE-----")[1].split("-----END CERTIFICATE-----")[0]
+                    # Remove any newlines or whitespaces
+                    b64_cert = "".join(b64_cert.split())
+                    der_data = base64.b64decode(b64_cert)
+                except Exception as e:
+                    raise ValueError(f"Failed to parse DER from PEM structure: {e}")
+
+            # By this point, der_data is guaranteed to be clean, binary ASN.1 DER
             return PQX509Certificate(der_data)
         
         raise TypeError(f"Unexpected type for PQCertificate: {type(value)}")
 
     def generate_error_msg(self, _value: IncomingValue) -> str:
-        return "must be a valid PQ X.509 certificate (bytes list or Base64 encoded)"
+        return "pq_cert must be a valid PQ X.509 certificate (bytes list or Base64 encoded)"
 
     def _dump(self, value: IncomingValue) -> Optional[str]:
         cert = self.cast(value)
@@ -279,7 +294,6 @@ class PQCertificate(ModelType):
         cert = self.cast(value)
         if not cert:
             return None
-        # Restituisce sempre Base64 per coerenza API
         return base64.b64encode(cert.public_bytes()).decode("utf-8")
     
     @property
