@@ -20,21 +20,33 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 # algorithms
 aes_block_size = 16
 
+# dictionary that maps the pq algorithms to the correct liboqs syntax
+OQS_ALG_MAP = {
+            "slh-dsa-shake-256s": "SLH_DSA_PURE_SHAKE_256S",
+            "slh-dsa-shake-256f": "SLH_DSA_PURE_SHAKE_256F",
+            "slh-dsa-sha2-256s":  "SLH_DSA_PURE_SHA2_256S",
+            "slh-dsa-sha2-256f":  "SLH_DSA_PURE_SHA2_256F",
+            "ml-dsa-44":          "ML-DSA-44",
+            "ml-dsa-65":          "ML-DSA-65",
+            "ml-dsa-87":          "ML-DSA-87",
+        }
 def verify_pq_signature(message, signature, signer_public_key, sigalg):
-    # --- DEBUG: Print all supported liboqs algorithms ---
-    supported_algs = oqs.get_supported_sig_mechanisms()
+    # Translate the algorithm name, defaulting to the raw string if not in the map
+    mapped_alg = OQS_ALG_MAP.get(sigalg.lower(), sigalg)
+    # --------------------------------------------
+
     print(f"\n[DEBUG] verify_pq_signature called with requested algorithm: '{sigalg}'")
-    print(f"[DEBUG] liboqs currently supports the following signature mechanisms:")
-    # ----------------------------------------------------
+    print(f"[DEBUG] Mapped to liboqs target algorithm: '{mapped_alg}'")
 
     encoded_message = message if isinstance(message, bytes) else bytes(message, encoding="utf-8")
     
     # liboqs algorithm strings are case-sensitive.
     # We dynamically find the exactly matched string from liboqs's supported mechanisms, ignoring case.
-    correct_alg_name = sigalg.upper() # Fallback default
+    supported_algs = oqs.get_supported_sig_mechanisms()
+    correct_alg_name = mapped_alg.upper() # Fallback default
     
     for alg in supported_algs:
-        if alg.lower() == sigalg.lower():
+        if alg.lower() == mapped_alg.lower():
             correct_alg_name = alg
             break
 
